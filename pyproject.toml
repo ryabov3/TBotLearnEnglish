@@ -1,0 +1,15 @@
+[project]
+name = "tbotlearnenglish"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+    "aiogram>=3.26.0",
+    "aiomysql>=0.3.2",
+    "alembic>=1.18.4",
+    "asyncmy>=0.2.11",
+    "cryptography>=46.0.5",
+    "environs>=14.6.0",
+    "sqlalchemy>=2.0.48",
+]
