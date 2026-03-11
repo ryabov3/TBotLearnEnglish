@@ -1,6 +1,15 @@
 # states/states.py
 from aiogram.fsm.state import State, StatesGroup
 
+class Registration(StatesGroup):
+    first_name = State()
+    last_name = State()
+    confirm = State() # <-- Добавили шаг подтверждения
+
+class ChangeProfile(StatesGroup):
+    first_name = State()
+    last_name = State()
+
 class AdminPanel(StatesGroup):
     waiting_for_username_teacher = State()
     waiting_for_username_remove = State()
@@ -19,7 +28,7 @@ class TeacherTask(StatesGroup):
     title = State()
     description = State()
     media = State()
-    select_groups = State() # Теперь тут множественный выбор
+    select_groups = State()
 
 class TeacherCheck(StatesGroup):
     waiting_for_grade = State()

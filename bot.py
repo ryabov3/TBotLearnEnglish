@@ -12,6 +12,7 @@ from handlers.teacher import teacher_router
 
 async def set_bot_commands(bot: Bot):
     commands = [
+        BotCommand(command="start", description="Нажмите старт, чтобы начать"),
         BotCommand(command="menu", description="Открыть панель управления"),
         BotCommand(command="profile", description="Мой профиль (для ученика)"),
         BotCommand(command="admin", description="Панель администратора")
