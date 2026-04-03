@@ -6,28 +6,24 @@ from aiogram.utils.keyboard import InlineKeyboardBuilder
 from sqlalchemy import select
 from datetime import date, timedelta
 
-from config import ADMIN_ID
+from config import ADMINS_ID
 from database.engine import SessionLocal
 from database.models import User, Task, Submission
 from states.states import StudentTask, Registration, ChangeProfile
 
 student_router = Router()
 
-
 def get_cancel_s():
     builder = InlineKeyboardBuilder()
     builder.button(text="❌ Отмена", callback_data="s_panel")
     return builder.as_markup()
-
 
 async def send_role_panel(message: types.Message, role: str, is_edit: bool = False):
     builder = InlineKeyboardBuilder()
     if role in ["teacher", "admin"]:
         builder.button(text="📝 Создать задание", callback_data="t_new_task")
         builder.button(text="✅ Проверить ответы", callback_data="t_check_tasks_0")
-        builder.button(
-            text="📊 Статистика", callback_data="t_st_pg_0"
-        )  # <-- НОВАЯ КНОПКА
+        builder.button(text="📊 Статистика", callback_data="t_st_pg_0")
         builder.button(text="➕ Создать группу", callback_data="t_add_group")
         builder.button(text="👤 Добавить ученика", callback_data="t_add_student")
         builder.adjust(1)
@@ -48,14 +44,16 @@ async def send_role_panel(message: types.Message, role: str, is_edit: bool = Fal
 
 
 # ================= РЕГИСТРАЦИЯ И СТАРТ =================
+# Фильтр убран. Теперь /start работает везде и всегда!
 @student_router.message(CommandStart())
 async def cmd_start(message: types.Message, state: FSMContext):
+    await state.clear()
     async with SessionLocal() as session:
         user = await session.get(User, message.from_user.id)
         username = message.from_user.username or "Без_юзернейма"
 
         if not user:
-            role = "admin" if message.from_user.id == ADMIN_ID else "student"
+            role = "admin" if message.from_user.id in ADMINS_ID else "student"
             user = User(id=message.from_user.id, username=username, role=role)
             session.add(user)
             await session.commit()
@@ -128,6 +126,7 @@ async def reg_confirm_no(callback: types.CallbackQuery, state: FSMContext):
 
 
 # ================= МЕНЮ И ПРОФИЛЬ =================
+# Фильтр убран. /menu работает безотказно.
 @student_router.message(Command("menu"))
 async def cmd_menu(message: types.Message, state: FSMContext):
     await state.clear()
@@ -151,7 +150,7 @@ async def back_to_student_panel(callback: types.CallbackQuery, state: FSMContext
         if user and not user.is_banned:
             await send_role_panel(callback.message, user.role, is_edit=True)
 
-
+# Фильтр убран.
 @student_router.message(Command("profile"))
 async def cmd_profile(message: types.Message, state: FSMContext):
     await state.clear()
@@ -305,7 +304,7 @@ async def show_tasks(callback: types.CallbackQuery, state: FSMContext):
         builder = InlineKeyboardBuilder()
         builder.button(text="◀️ В меню", callback_data="s_panel")
 
-        if not user.class_name:
+        if not user or not user.class_name:
             return await callback.message.edit_text(
                 "Учитель еще не добавил тебя в группу!",
                 reply_markup=builder.as_markup(),

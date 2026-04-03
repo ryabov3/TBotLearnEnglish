@@ -1,9 +1,10 @@
-# bot.py
 import asyncio
 import logging
 from aiogram import Bot, Dispatcher, types
 from aiogram.filters import Command
 from aiogram.types import BotCommand
+from aiogram.client.session.aiohttp import AiohttpSession
+
 import config
 
 from handlers.admin import admin_router
@@ -21,7 +22,12 @@ async def set_bot_commands(bot: Bot):
 
 async def main():
     logging.basicConfig(level=logging.INFO)
-    bot = Bot(token=config.BOT_TOKEN)
+    proxy = (
+        f"http://{config.proxy_login}:{config.proxy_password}@"
+        f"{config.proxy_host}:{config.proxy_port}"
+    )
+    session = AiohttpSession(proxy=proxy)
+    bot = Bot(token=config.BOT_TOKEN, session=session)
     dp = Dispatcher()
     
     # --- ТЕСТОВАЯ КОМАНДА (Без базы данных) ---
