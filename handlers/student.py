@@ -22,14 +22,19 @@ async def send_role_panel(message: types.Message, role: str, is_edit: bool = Fal
     builder = InlineKeyboardBuilder()
     if role in ["teacher", "admin"]:
         builder.button(text="📝 Создать задание", callback_data="t_new_task")
+        
+        # Кнопка продолжения черновика появится только в меню колбэка t_menu (см teacher.py)
+        
         builder.button(text="✅ Проверить ответы", callback_data="t_check_tasks_0")
         builder.button(text="📊 Статистика", callback_data="t_st_pg_0")
         builder.button(text="➕ Создать группу", callback_data="t_add_group")
         builder.button(text="👤 Добавить ученика", callback_data="t_add_student")
+        builder.button(text="➖ Удалить ученика", callback_data="t_rem_student")
         builder.adjust(1)
         text = "👨‍🏫 <b>Панель Учителя</b>\nВыберите действие:"
     else:
-        builder.button(text="📝 Новые задания", callback_data="s_tasks")
+        builder.button(text="📝 Новые темы", callback_data="s_tasks_new")
+        builder.button(text="⏳ Темы в процессе", callback_data="s_tasks_progress")
         builder.button(text="✅ Выполненные задания", callback_data="s_completed")
         builder.button(text="👤 Мой профиль", callback_data="s_profile")
         builder.adjust(1)
@@ -44,10 +49,9 @@ async def send_role_panel(message: types.Message, role: str, is_edit: bool = Fal
 
 
 # ================= РЕГИСТРАЦИЯ И СТАРТ =================
-# Фильтр убран. Теперь /start работает везде и всегда!
 @student_router.message(CommandStart())
 async def cmd_start(message: types.Message, state: FSMContext):
-    await state.clear()
+    await state.set_state(None) # Не удаляем память (черновик), просто обнуляем шаг
     async with SessionLocal() as session:
         user = await session.get(User, message.from_user.id)
         username = message.from_user.username or "Без_юзернейма"
@@ -112,7 +116,7 @@ async def reg_confirm_yes(callback: types.CallbackQuery, state: FSMContext):
         await session.commit()
         role = user.role
 
-    await state.clear()
+    await state.set_state(None)
     await callback.message.edit_text("✅ Отлично! Данные сохранены.")
     await send_role_panel(callback.message, role, is_edit=False)
 
@@ -126,10 +130,9 @@ async def reg_confirm_no(callback: types.CallbackQuery, state: FSMContext):
 
 
 # ================= МЕНЮ И ПРОФИЛЬ =================
-# Фильтр убран. /menu работает безотказно.
 @student_router.message(Command("menu"))
 async def cmd_menu(message: types.Message, state: FSMContext):
-    await state.clear()
+    await state.set_state(None) # Не удаляем черновики из памяти
     async with SessionLocal() as session:
         user = await session.get(User, message.from_user.id)
         if user and not user.is_banned:
@@ -144,16 +147,16 @@ async def cmd_menu(message: types.Message, state: FSMContext):
 
 @student_router.callback_query(F.data == "s_panel")
 async def back_to_student_panel(callback: types.CallbackQuery, state: FSMContext):
-    await state.clear()
+    await state.set_state(None)
     async with SessionLocal() as session:
         user = await session.get(User, callback.from_user.id)
         if user and not user.is_banned:
             await send_role_panel(callback.message, user.role, is_edit=True)
 
-# Фильтр убран.
+
 @student_router.message(Command("profile"))
 async def cmd_profile(message: types.Message, state: FSMContext):
-    await state.clear()
+    await state.set_state(None)
     await show_profile(message)
 
 
@@ -227,7 +230,7 @@ async def edit_last_name(message: types.Message, state: FSMContext):
         user.first_name = data["first_name"]
         user.last_name = message.text
         await session.commit()
-    await state.clear()
+    await state.set_state(None)
     await message.answer("✅ Имя и фамилия успешно изменены!")
     await send_role_panel(message, user.role, is_edit=False)
 
@@ -255,14 +258,14 @@ async def show_completed_tasks(callback: types.CallbackQuery):
         for sub, task in rows:
             grade_str = f"Оценка: {sub.grade}" if sub.grade else "⏳ На проверке"
             builder.button(
-                text=f"📝 {task.title} ({grade_str})", callback_data=f"s_sub_{sub.id}"
+                text=f"📝 {task.topic} | {task.title} ({grade_str})", callback_data=f"s_sub_{sub.id}"
             )
 
         builder.button(text="◀️ В меню", callback_data="s_panel")
         builder.adjust(1)
 
         await callback.message.edit_text(
-            "✅ <b>Выполненные задания:</b>",
+            "✅ <b>Последние выполненные задания:</b>",
             parse_mode="HTML",
             reply_markup=builder.as_markup(),
         )
@@ -283,6 +286,7 @@ async def show_submission_details(callback: types.CallbackQuery):
         comment_str = sub.teacher_comment if sub.teacher_comment else "Нет комментария"
 
         text = (
+            f"Тема: <b>{task.topic}</b>\n"
             f"📝 <b>Задание:</b> {task.title}\n"
             f"📖 <b>Описание:</b> {task.description}\n\n"
             f"⭐️ <b>Твоя оценка:</b> {grade_str}\n"
@@ -296,9 +300,11 @@ async def show_submission_details(callback: types.CallbackQuery):
         )
 
 
-# ================= ВЫПОЛНЕНИЕ НОВЫХ ЗАДАНИЙ =================
-@student_router.callback_query(F.data == "s_tasks")
-async def show_tasks(callback: types.CallbackQuery, state: FSMContext):
+# ================= ОТОБРАЖЕНИЕ ТЕМ =================
+@student_router.callback_query(F.data.in_(["s_tasks_new", "s_tasks_progress"]))
+async def show_topics(callback: types.CallbackQuery, state: FSMContext):
+    is_progress_tab = (callback.data == "s_tasks_progress")
+    
     async with SessionLocal() as session:
         user = await session.get(User, callback.from_user.id)
         builder = InlineKeyboardBuilder()
@@ -310,27 +316,71 @@ async def show_tasks(callback: types.CallbackQuery, state: FSMContext):
                 reply_markup=builder.as_markup(),
             )
 
-        subq = select(Submission.task_id).where(Submission.student_id == user.id)
-        result = await session.execute(
+        tasks_result = await session.execute(
             select(Task).where(
                 Task.class_name == user.class_name,
                 Task.group_name == user.group_name,
-                Task.id.not_in(subq),
-            )
+            ).order_by(Task.id)
         )
-        tasks = result.scalars().all()
+        all_tasks = tasks_result.scalars().all()
 
-        if not tasks:
-            return await callback.message.edit_text(
-                "🎉 Ура! У тебя нет невыполненных заданий на сегодня.",
-                reply_markup=builder.as_markup(),
-            )
+        subs_result = await session.execute(
+            select(Submission.task_id).where(Submission.student_id == user.id)
+        )
+        completed_task_ids = [r[0] for r in subs_result.all()]
 
-        task = tasks[0]
+        topics = {}
+        for t in all_tasks:
+            if t.topic not in topics:
+                topics[t.topic] = {'total': 0, 'completed': 0, 'first_uncompleted_id': None}
+            
+            topics[t.topic]['total'] += 1
+            if t.id in completed_task_ids:
+                topics[t.topic]['completed'] += 1
+            elif topics[t.topic]['first_uncompleted_id'] is None:
+                topics[t.topic]['first_uncompleted_id'] = t.id
+
+        displayed_topics = 0
+        topic_builder = InlineKeyboardBuilder()
+
+        for topic_name, data in topics.items():
+            is_new = (data['completed'] == 0)
+            in_progress = (0 < data['completed'] < data['total'])
+
+            if (is_progress_tab and in_progress) or (not is_progress_tab and is_new):
+                displayed_topics += 1
+                progress_text = f"({data['completed']}/{data['total']})"
+                btn_data = f"s_do_t_{data['first_uncompleted_id']}"
+                topic_builder.button(text=f"📂 {topic_name} {progress_text}", callback_data=btn_data)
+
+        topic_builder.adjust(1)
+        topic_builder.attach(builder) 
+
+        title_text = "⏳ <b>Темы в процессе:</b>" if is_progress_tab else "🆕 <b>Новые темы:</b>"
+        empty_text = "У тебя нет тем в процессе выполнения." if is_progress_tab else "🎉 Ура! У тебя нет новых тем на сегодня."
+
+        if displayed_topics == 0:
+            await callback.message.edit_text(empty_text, reply_markup=builder.as_markup())
+        else:
+            await callback.message.edit_text(title_text, parse_mode="HTML", reply_markup=topic_builder.as_markup())
+
+
+# ================= ВЫПОЛНЕНИЕ ЗАДАНИЯ =================
+@student_router.callback_query(F.data.startswith("s_do_t_"))
+async def start_specific_task(callback: types.CallbackQuery, state: FSMContext):
+    task_id = int(callback.data.split("_")[3])
+    
+    async with SessionLocal() as session:
+        task = await session.get(Task, task_id)
+        if not task:
+            return await callback.answer("Задание не найдено.")
+
         await callback.message.delete()
 
         await callback.message.answer(
-            f"📝 <b>Задание:</b> {task.title}\n\n{task.description}", parse_mode="HTML"
+            f"📂 Тема: <b>{task.topic}</b>\n\n"
+            f"📝 <b>Задание:</b> {task.title}\n\n"
+            f"{task.description}", parse_mode="HTML"
         )
 
         if task.media_id:
@@ -349,33 +399,94 @@ async def show_tasks(callback: types.CallbackQuery, state: FSMContext):
                 await callback.message.answer_document(task.media_id)
 
         cancel_builder = InlineKeyboardBuilder()
-        cancel_builder.button(text="❌ Отмена", callback_data="s_panel")
+        cancel_builder.button(text="❌ Выйти в меню (Прогресс сохранен)", callback_data="s_panel")
+        
+        req_text = "🤷‍♂️ Любой формат (Аудио или Видео)"
+        if task.expected_answer == "audio": req_text = "🎤 Только Аудио/Голосовое"
+        elif task.expected_answer == "video": req_text = "📹 Только Видео/Кружок"
+
         await callback.message.answer(
-            "Запиши и отправь свой ответ (Голосовое сообщение или Видео-кружок) 🎤",
+            f"⚠️ <b>Формат ответа:</b> {req_text}\n\n"
+            f"Запиши и отправь свой ответ 🎤\n"
+            f"<i>(Ты сможешь прослушать/посмотреть его перед отправкой учителю)</i>",
+            parse_mode="HTML",
             reply_markup=cancel_builder.as_markup(),
         )
-        await state.update_data(task_id=task.id)
+        
+        await state.update_data(current_task_id=task.id, current_topic=task.topic)
         await state.set_state(StudentTask.waiting_for_answer)
 
+# Если ученик отправляет текст, картинку и т.д. (ошибка формата)
+@student_router.message(StudentTask.waiting_for_answer, ~(F.voice | F.video_note | F.video | F.audio))
+async def receive_answer_invalid(message: types.Message):
+    await message.answer("❌ Ответ на задание должен быть записан как медиа-файл (голосовое, аудио, видео-кружок или видео). Попробуйте еще раз!")
 
-@student_router.message(
-    StudentTask.waiting_for_answer, F.voice | F.video_note | F.video
-)
+@student_router.message(StudentTask.waiting_for_answer, F.voice | F.video_note | F.video | F.audio)
 async def receive_answer(message: types.Message, state: FSMContext):
     data = await state.get_data()
-    media_id = (
-        message.voice.file_id
-        if message.voice
-        else (
-            message.video_note.file_id if message.video_note else message.video.file_id
-        )
-    )
-    media_type = (
-        "voice" if message.voice else ("video_note" if message.video_note else "video")
-    )
-
+    task_id = data.get("current_task_id")
+    if not task_id: return
+    
+    # 1. Валидация формата ответа под требования учителя
     async with SessionLocal() as session:
-        user = await session.get(User, message.from_user.id)
+        task = await session.get(Task, task_id)
+        
+    media_type = "voice" if (message.voice or message.audio) else ("video_note" if message.video_note else "video")
+    media_id = (
+        message.voice.file_id if message.voice 
+        else (message.audio.file_id if message.audio 
+              else (message.video_note.file_id if message.video_note else message.video.file_id))
+    )
+    
+    if task.expected_answer == "audio" and media_type not in ["voice", "audio"]:
+        return await message.answer(
+            "❌ <b>Ошибка формата!</b>\nОтвет на это задание может быть <b>только аудио</b> (учитель выбрал: Аудио/Голосовое).\n\nЗапишите голосовое сообщение.", 
+            parse_mode="HTML"
+        )
+    elif task.expected_answer == "video" and media_type not in ["video_note", "video"]:
+        return await message.answer(
+            "❌ <b>Ошибка формата!</b>\nОтвет на это задание может быть <b>только видео</b> (учитель выбрал: Видео/Кружок).\n\nЗапишите видео-сообщение.", 
+            parse_mode="HTML"
+        )
+
+    # 2. Сохраняем во временную память
+    await state.update_data(temp_media_id=media_id, temp_media_type=media_type)
+
+    builder = InlineKeyboardBuilder()
+    builder.button(text="✅ Отправить учителю", callback_data="ans_send")
+    builder.button(text="🔄 Записать заново", callback_data="ans_retry")
+    builder.button(text="❌ Выйти в меню", callback_data="s_panel")
+    builder.adjust(1)
+
+    await message.answer(
+        "Я получил твой ответ! Хочешь отправить его учителю или записать заново?",
+        reply_markup=builder.as_markup()
+    )
+    await state.set_state(StudentTask.confirm_answer)
+
+
+@student_router.callback_query(StudentTask.confirm_answer, F.data == "ans_retry")
+async def retry_answer(callback: types.CallbackQuery, state: FSMContext):
+    await state.update_data(temp_media_id=None, temp_media_type=None)
+    
+    cancel_builder = InlineKeyboardBuilder()
+    cancel_builder.button(text="❌ Выйти в меню", callback_data="s_panel")
+    
+    await callback.message.edit_text(
+        "Хорошо, жду новый вариант. Запиши и отправь правильный формат 🎤",
+        reply_markup=cancel_builder.as_markup()
+    )
+    await state.set_state(StudentTask.waiting_for_answer)
+
+
+@student_router.callback_query(StudentTask.confirm_answer, F.data == "ans_send")
+async def send_answer_to_db(callback: types.CallbackQuery, state: FSMContext):
+    data = await state.get_data()
+    task_id = data["current_task_id"]
+    topic = data["current_topic"]
+    
+    async with SessionLocal() as session:
+        user = await session.get(User, callback.from_user.id)
         today = date.today()
         if user.last_task_date == today:
             user.tasks_today += 1
@@ -393,20 +504,44 @@ async def receive_answer(message: types.Message, state: FSMContext):
         user.total_completed += 1
 
         new_sub = Submission(
-            task_id=data["task_id"],
-            student_id=message.from_user.id,
-            media_id=media_id,
-            media_type=media_type,
+            task_id=task_id,
+            student_id=callback.from_user.id,
+            media_id=data["temp_media_id"],
+            media_type=data["temp_media_type"],
         )
         session.add(new_sub)
         await session.commit()
 
-    await state.clear()
-    builder = InlineKeyboardBuilder()
-    builder.button(text="Продолжить решать ➡️", callback_data="s_tasks")
-    builder.button(text="◀️ В меню", callback_data="s_panel")
-    builder.adjust(1)
-    await message.answer(
-        "✅ Отличная работа! Твой ответ отправлен учителю.",
-        reply_markup=builder.as_markup(),
-    )
+        subq = select(Submission.task_id).where(Submission.student_id == user.id)
+        result = await session.execute(
+            select(Task).where(
+                Task.class_name == user.class_name,
+                Task.group_name == user.group_name,
+                Task.topic == topic,
+                Task.id.not_in(subq)
+            ).order_by(Task.id).limit(1)
+        )
+        next_task = result.scalar_one_or_none()
+
+    await callback.message.delete()
+    
+    if next_task:
+        builder = InlineKeyboardBuilder()
+        builder.button(text="Продолжить тему ➡️", callback_data=f"s_do_t_{next_task.id}") 
+        builder.button(text="❌ Сделать паузу (в меню)", callback_data="s_panel")
+        builder.adjust(1)
+        await callback.message.answer(
+            "✅ Ответ отправлен! В этой теме есть еще задания. Продолжим?",
+            reply_markup=builder.as_markup(),
+        )
+    else:
+        builder = InlineKeyboardBuilder()
+        builder.button(text="🏠 Вернуться в меню", callback_data="s_panel")
+        await callback.message.answer(
+            f"🎉 <b>Поздравляю!</b> Ты полностью завершил тему <b>«{topic}»</b>! Ответы отправлены учителю.",
+            parse_mode="HTML",
+            reply_markup=builder.as_markup(),
+        )
+    
+    # Задание выполнено, обнуляем память выполнения задания
+    await state.set_state(None)

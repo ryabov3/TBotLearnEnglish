@@ -39,12 +39,14 @@ class Task(Base):
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     teacher_id: Mapped[int] = mapped_column(BigInteger)
-    title: Mapped[str] = mapped_column(String(255))
+    topic: Mapped[str] = mapped_column(String(255), default="Без темы") 
+    title: Mapped[str] = mapped_column(String(255)) 
     description: Mapped[str] = mapped_column(Text)
     media_id: Mapped[str] = mapped_column(String(255), nullable=True)
     media_type: Mapped[str] = mapped_column(String(50), nullable=True)
     class_name: Mapped[str] = mapped_column(String(50))
     group_name: Mapped[str] = mapped_column(String(50))
+    expected_answer: Mapped[str] = mapped_column(String(50), default="any") # audio, video, any
 
 
 class Submission(Base):

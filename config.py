@@ -17,4 +17,4 @@ proxy_port = env("PROXY_PORT")
 
 BOT_TOKEN = env("BOT_TOKEN")
 ADMINS_ID = list(map(int, env("ADMINS_ID").split(",")))
-DATABASE_URL = f"mysql+asyncmy://{db_user}:{db_password}@{db_host}:{db_port}/{db_name}"
+DATABASE_URL = f"mysql+aiomysql://{db_user}:{db_password}@{db_host}:{db_port}/{db_name}"

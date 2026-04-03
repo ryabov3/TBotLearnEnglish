@@ -1,8 +1,8 @@
-"""Init database with Submissions
+"""Initial db
 
-Revision ID: bf0c6239aa5a
+Revision ID: 17b3c560fa27
 Revises: 
-Create Date: 2026-03-10 13:05:01.163532
+Create Date: 2026-04-03 21:23:56.448313
 
 """
 from typing import Sequence, Union
@@ -12,7 +12,7 @@ import sqlalchemy as sa
 
 
 # revision identifiers, used by Alembic.
-revision: str = 'bf0c6239aa5a'
+revision: str = '17b3c560fa27'
 down_revision: Union[str, Sequence[str], None] = None
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
@@ -31,17 +31,21 @@ def upgrade() -> None:
     op.create_table('tasks',
     sa.Column('id', sa.Integer(), autoincrement=True, nullable=False),
     sa.Column('teacher_id', sa.BigInteger(), nullable=False),
+    sa.Column('topic', sa.String(length=255), nullable=False),
     sa.Column('title', sa.String(length=255), nullable=False),
     sa.Column('description', sa.Text(), nullable=False),
     sa.Column('media_id', sa.String(length=255), nullable=True),
     sa.Column('media_type', sa.String(length=50), nullable=True),
     sa.Column('class_name', sa.String(length=50), nullable=False),
     sa.Column('group_name', sa.String(length=50), nullable=False),
+    sa.Column('expected_answer', sa.String(length=50), nullable=False),
     sa.PrimaryKeyConstraint('id')
     )
     op.create_table('users',
     sa.Column('id', sa.BigInteger(), nullable=False),
     sa.Column('username', sa.String(length=255), nullable=True),
+    sa.Column('first_name', sa.String(length=100), nullable=True),
+    sa.Column('last_name', sa.String(length=100), nullable=True),
     sa.Column('role', sa.String(length=50), nullable=False),
     sa.Column('is_banned', sa.Boolean(), nullable=False),
     sa.Column('class_name', sa.String(length=50), nullable=True),

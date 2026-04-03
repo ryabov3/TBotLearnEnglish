@@ -4,7 +4,7 @@ from aiogram.fsm.state import State, StatesGroup
 class Registration(StatesGroup):
     first_name = State()
     last_name = State()
-    confirm = State() # <-- Добавили шаг подтверждения
+    confirm = State()
 
 class ChangeProfile(StatesGroup):
     first_name = State()
@@ -24,10 +24,17 @@ class TeacherAddStudent(StatesGroup):
     select_group = State()
     waiting_for_username = State()
 
+class TeacherRemoveStudent(StatesGroup):
+    select_group = State()
+    select_student = State()
+
 class TeacherTask(StatesGroup):
-    title = State()
+    topic = State()
+    title = State() 
     description = State()
     media = State()
+    answer_type = State() # Выбор типа ответа от ученика
+    add_more = State() 
     select_groups = State()
 
 class TeacherCheck(StatesGroup):
@@ -36,3 +43,4 @@ class TeacherCheck(StatesGroup):
 
 class StudentTask(StatesGroup):
     waiting_for_answer = State()
+    confirm_answer = State()
