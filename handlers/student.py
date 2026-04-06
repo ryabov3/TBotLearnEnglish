@@ -26,6 +26,7 @@ async def send_role_panel(message: types.Message, role: str, is_edit: bool = Fal
         # Кнопка продолжения черновика появится только в меню колбэка t_menu (см teacher.py)
         
         builder.button(text="✅ Проверить ответы", callback_data="t_check_tasks_0")
+        builder.button(text="📋 Список классов", callback_data="t_list_classes_0") # НОВАЯ КНОПКА ЗДЕСЬ
         builder.button(text="📊 Статистика", callback_data="t_st_pg_0")
         builder.button(text="➕ Создать группу", callback_data="t_add_group")
         builder.button(text="👤 Добавить ученика", callback_data="t_add_student")
