@@ -32,23 +32,85 @@ async def is_teacher(user_id: int) -> bool:
 @teacher_router.callback_query(F.data == "t_menu")
 async def teacher_menu_callback(callback: types.CallbackQuery, state: FSMContext):
     data = await state.get_data()
-    # Сбрасываем стейт, но сохраняем data для черновиков
     await state.set_state(None) 
     
     builder = InlineKeyboardBuilder()
     builder.button(text="📝 Создать задание", callback_data="t_new_task")
     
-    # Если в памяти остался начатый черновик — предлагаем продолжить
     if data.get("tasks_list") or data.get("topic"):
         builder.button(text="♻️ Продолжить создание темы", callback_data="t_resume_draft")
         
     builder.button(text="✅ Проверить ответы", callback_data="t_check_tasks_0")
+    builder.button(text="📋 Список классов", callback_data="t_lc_pg_0") # Новая кнопка
     builder.button(text="📊 Статистика", callback_data="t_st_pg_0")
     builder.button(text="➕ Создать группу", callback_data="t_add_group")
     builder.button(text="👤 Добавить ученика", callback_data="t_add_student")
     builder.button(text="➖ Удалить ученика", callback_data="t_rem_student")
     builder.adjust(1)
     await callback.message.edit_text("👨‍🏫 <b>Панель Учителя</b>\nВыберите действие:", parse_mode="HTML", reply_markup=builder.as_markup())
+
+
+# ================= 0. СПИСОК КЛАССОВ (НОВОЕ) =================
+@teacher_router.callback_query(F.data.startswith("t_lc_pg_"))
+async def list_classes_pages(callback: types.CallbackQuery):
+    page = int(callback.data.split("_")[-1])
+    per_page = 5
+    
+    async with SessionLocal() as session:
+        groups = (await session.execute(select(StudyGroup).where(StudyGroup.teacher_id == callback.from_user.id))).scalars().all()
+
+    if not groups:
+        b = InlineKeyboardBuilder()
+        b.button(text="◀️ В меню", callback_data="t_menu")
+        return await callback.message.edit_text("У вас пока нет созданных классов.", reply_markup=b.as_markup())
+
+    total_pages = max(1, (len(groups) + per_page - 1) // per_page)
+    current_groups = groups[page*per_page : (page+1)*per_page]
+
+    b = InlineKeyboardBuilder()
+    for g in current_groups:
+        b.button(text=f"📋 {g.class_name} - {g.group_name}", callback_data=f"t_lc_g_{g.id}")
+    b.adjust(1)
+    
+    nav = InlineKeyboardBuilder()
+    if page > 0: nav.button(text="⬅️ Пред.", callback_data=f"t_lc_pg_{page-1}")
+    if page < total_pages - 1: nav.button(text="След. ➡️", callback_data=f"t_lc_pg_{page+1}")
+    nav.adjust(2)
+    b.attach(nav)
+    
+    back = InlineKeyboardBuilder()
+    back.button(text="🏠 В меню", callback_data="t_menu")
+    b.attach(back)
+
+    await callback.message.edit_text(f"Выберите класс (Страница {page+1} из {total_pages}):", reply_markup=b.as_markup())
+
+
+@teacher_router.callback_query(F.data.startswith("t_lc_g_"))
+async def list_class_students(callback: types.CallbackQuery):
+    group_id = int(callback.data.split("_")[-1])
+    
+    async with SessionLocal() as session:
+        group = await session.get(StudyGroup, group_id)
+        students = (await session.execute(
+            select(User).where(User.class_name == group.class_name, User.group_name == group.group_name, User.role == "student")
+        )).scalars().all()
+
+    b = InlineKeyboardBuilder()
+    b.button(text="◀️ Назад", callback_data="t_lc_pg_0")
+
+    if not students:
+        return await callback.message.edit_text(
+            f"В классе <b>{group.class_name} - {group.group_name}</b> пока нет учеников.", 
+            parse_mode="HTML", reply_markup=b.as_markup()
+        )
+
+    text = f"📋 <b>Список: {group.class_name} - {group.group_name}</b>\n\n"
+    for i, s in enumerate(students, 1):
+        uname = f"@{s.username}" if s.username else "нет_юзернейма"
+        text += f"{i}. {group.class_name}-{group.group_name} - {s.first_name} {s.last_name} ({uname})\n"
+
+    await callback.message.edit_text(text, parse_mode="HTML", reply_markup=b.as_markup())
+
 
 # ================= 1. СОЗДАНИЕ ГРУППЫ =================
 @teacher_router.callback_query(F.data == "t_add_group")
