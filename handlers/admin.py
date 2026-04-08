@@ -21,7 +21,8 @@ async def show_admin_panel(message: types.Message, is_edit: bool = False):
     builder = InlineKeyboardBuilder()
     builder.button(text="➕ Назначить учителя", callback_data="admin_add_teacher")
     builder.button(text="➖ Убрать учителя", callback_data="admin_rem_teacher")
-    builder.button(text="👨‍🏫 Список учителей", callback_data="admin_list_teachers")
+    # Перенаправляем кнопку на нашу новую систему навигации
+    builder.button(text="👨‍🏫 Список учителей", callback_data="admtl_0") 
     builder.button(text="📢 Сообщение ученикам", callback_data="admin_broad_student")
     builder.button(text="📢 Сообщение учителям", callback_data="admin_broad_teacher")
     builder.button(text="🔍 Действия пользователя", callback_data="admin_actions")
@@ -47,29 +48,226 @@ async def admin_back(callback: types.CallbackQuery, state: FSMContext):
     await state.clear()
     await show_admin_panel(callback.message, is_edit=True)
 
-@admin_router.callback_query(F.data == "admin_list_teachers")
-async def list_teachers(callback: types.CallbackQuery, state: FSMContext):
-    await state.clear()
-    async with SessionLocal() as session:
-        result = await session.execute(select(User).where(User.role == "teacher"))
-        teachers = result.scalars().all()
+# ================= 👨‍🏫 ИЕРАРХИЯ: УЧИТЕЛЯ -> КЛАССЫ -> ГРУППЫ -> УЧЕНИКИ =================
 
-    builder = InlineKeyboardBuilder()
-    builder.button(text="◀️ Назад", callback_data="admin_back")
+# 1. Список учителей
+@admin_router.callback_query(F.data.startswith("admtl_"))
+async def admin_list_teachers_pg(callback: types.CallbackQuery):
+    page = int(callback.data.split("_")[1])
+    per_page = 5
+    
+    async with SessionLocal() as session:
+        # Берем и учителей и админов (так как админы тоже могут создавать группы)
+        teachers = (await session.execute(select(User).where(User.role.in_(["teacher", "admin"])))).scalars().all()
 
     if not teachers:
-        return await callback.message.edit_text(
-            "В системе пока нет учителей.", reply_markup=builder.as_markup()
-        )
+        b = InlineKeyboardBuilder()
+        b.button(text="◀️ Назад", callback_data="admin_back")
+        return await callback.message.edit_text("В системе пока нет учителей.", reply_markup=b.as_markup())
 
-    text = "👨‍🏫 <b>Список учителей:</b>\n\n"
-    for t in teachers:
-        fname = t.first_name or "Без_имени"
-        lname = t.last_name or "Без_фамилии"
-        uname = f"@{t.username}" if t.username else "нет_юзернейма"
-        text += f"• {fname} {lname} ({uname})\n"
+    total_pages = max(1, (len(teachers) + per_page - 1) // per_page)
+    current_teachers = teachers[page*per_page : (page+1)*per_page]
 
-    await callback.message.edit_text(text, parse_mode="HTML", reply_markup=builder.as_markup())
+    b = InlineKeyboardBuilder()
+    for t in current_teachers:
+        name = f"{t.first_name or ''} {t.last_name or ''}".strip() or t.username or str(t.id)
+        b.button(text=f"👨‍🏫 {name}", callback_data=f"admt_{t.id}_0")
+    b.adjust(1)
+
+    nav = InlineKeyboardBuilder()
+    if page > 0: nav.button(text="⬅️ Пред.", callback_data=f"admtl_{page-1}")
+    if page < total_pages - 1: nav.button(text="След. ➡️", callback_data=f"admtl_{page+1}")
+    nav.adjust(2)
+    b.attach(nav)
+
+    back = InlineKeyboardBuilder()
+    back.button(text="◀️ В панель", callback_data="admin_back")
+    b.attach(back)
+
+    await callback.message.edit_text(f"👨‍🏫 <b>Список учителей</b> (Стр. {page+1}/{total_pages}):\nВыберите учителя:", parse_mode="HTML", reply_markup=b.as_markup())
+
+# 2. Список классов конкретного учителя
+@admin_router.callback_query(F.data.startswith("admt_"))
+async def admin_list_classes_pg(callback: types.CallbackQuery):
+    parts = callback.data.split("_")
+    teacher_id = int(parts[1])
+    page = int(parts[2])
+    per_page = 5
+
+    async with SessionLocal() as session:
+        teacher = await session.get(User, teacher_id)
+        groups = (await session.execute(select(StudyGroup).where(StudyGroup.teacher_id == teacher_id))).scalars().all()
+
+    # Фильтруем только уникальные классы (убираем дубликаты групп)
+    unique_classes = {}
+    for g in groups:
+        if g.class_name not in unique_classes:
+            unique_classes[g.class_name] = g
+
+    distinct_groups = list(unique_classes.values())
+
+    if not distinct_groups:
+        b = InlineKeyboardBuilder()
+        b.button(text="◀️ К учителям", callback_data="admtl_0")
+        return await callback.message.edit_text("У этого учителя пока нет классов.", reply_markup=b.as_markup())
+
+    total_pages = max(1, (len(distinct_groups) + per_page - 1) // per_page)
+    current_groups = distinct_groups[page*per_page : (page+1)*per_page]
+
+    b = InlineKeyboardBuilder()
+    for g in current_groups:
+        b.button(text=f"🏫 Класс: {g.class_name}", callback_data=f"admc_{g.id}_0")
+    b.adjust(1)
+
+    nav = InlineKeyboardBuilder()
+    if page > 0: nav.button(text="⬅️ Пред.", callback_data=f"admt_{teacher_id}_{page-1}")
+    if page < total_pages - 1: nav.button(text="След. ➡️", callback_data=f"admt_{teacher_id}_{page+1}")
+    nav.adjust(2)
+    b.attach(nav)
+
+    back = InlineKeyboardBuilder()
+    back.button(text="◀️ К учителям", callback_data="admtl_0")
+    b.attach(back)
+
+    t_name = f"{teacher.first_name or ''} {teacher.last_name or ''}".strip() or teacher.username or "Учитель"
+    await callback.message.edit_text(f"👨‍🏫 Учитель: <b>{t_name}</b>\n🏫 Выберите класс (Стр. {page+1}/{total_pages}):", parse_mode="HTML", reply_markup=b.as_markup())
+
+# 3. Список групп в классе
+@admin_router.callback_query(F.data.startswith("admc_"))
+async def admin_list_groups_pg(callback: types.CallbackQuery):
+    parts = callback.data.split("_")
+    base_group_id = int(parts[1])
+    page = int(parts[2])
+    per_page = 5
+
+    async with SessionLocal() as session:
+        base_group = await session.get(StudyGroup, base_group_id)
+        if not base_group:
+            return await callback.answer("Ошибка: Класс не найден", show_alert=True)
+        
+        # Ищем все группы для этого учителя и этого названия класса
+        groups = (await session.execute(
+            select(StudyGroup).where(
+                StudyGroup.teacher_id == base_group.teacher_id, 
+                StudyGroup.class_name == base_group.class_name
+            )
+        )).scalars().all()
+
+    if not groups:
+        b = InlineKeyboardBuilder()
+        b.button(text="◀️ Назад", callback_data=f"admt_{base_group.teacher_id}_0")
+        return await callback.message.edit_text("В этом классе нет групп.", reply_markup=b.as_markup())
+
+    total_pages = max(1, (len(groups) + per_page - 1) // per_page)
+    current_groups = groups[page*per_page : (page+1)*per_page]
+
+    b = InlineKeyboardBuilder()
+    for g in current_groups:
+        b.button(text=f"👥 Группа: {g.group_name}", callback_data=f"admg_{g.id}_0")
+    b.adjust(1)
+
+    nav = InlineKeyboardBuilder()
+    if page > 0: nav.button(text="⬅️ Пред.", callback_data=f"admc_{base_group_id}_{page-1}")
+    if page < total_pages - 1: nav.button(text="След. ➡️", callback_data=f"admc_{base_group_id}_{page+1}")
+    nav.adjust(2)
+    b.attach(nav)
+
+    back = InlineKeyboardBuilder()
+    back.button(text="◀️ К классам", callback_data=f"admt_{base_group.teacher_id}_0")
+    b.attach(back)
+
+    await callback.message.edit_text(f"🏫 Класс: <b>{base_group.class_name}</b>\n👥 Выберите группу (Стр. {page+1}/{total_pages}):", parse_mode="HTML", reply_markup=b.as_markup())
+
+# 4. Список учеников в группе
+@admin_router.callback_query(F.data.startswith("admg_"))
+async def admin_list_students_pg(callback: types.CallbackQuery):
+    parts = callback.data.split("_")
+    group_id = int(parts[1])
+    page = int(parts[2])
+    per_page = 5
+
+    async with SessionLocal() as session:
+        group = await session.get(StudyGroup, group_id)
+        if not group:
+            return await callback.answer("Ошибка: Группа не найдена", show_alert=True)
+        
+        students = (await session.execute(
+            select(User).where(
+                User.class_name == group.class_name,
+                User.group_name == group.group_name,
+                User.role == "student"
+            )
+        )).scalars().all()
+
+    if not students:
+        b = InlineKeyboardBuilder()
+        b.button(text="◀️ Назад", callback_data=f"admc_{group_id}_0")
+        return await callback.message.edit_text(f"В группе <b>{group.group_name}</b> пока нет учеников.", parse_mode="HTML", reply_markup=b.as_markup())
+
+    total_pages = max(1, (len(students) + per_page - 1) // per_page)
+    current_students = students[page*per_page : (page+1)*per_page]
+
+    b = InlineKeyboardBuilder()
+    for s in current_students:
+        name = f"{s.first_name or ''} {s.last_name or ''}".strip() or s.username or str(s.id)
+        b.button(text=f"👤 {name}", callback_data=f"adms_{s.id}_{group_id}")
+    b.adjust(1)
+
+    nav = InlineKeyboardBuilder()
+    if page > 0: nav.button(text="⬅️ Пред.", callback_data=f"admg_{group_id}_{page-1}")
+    if page < total_pages - 1: nav.button(text="След. ➡️", callback_data=f"admg_{group_id}_{page+1}")
+    nav.adjust(2)
+    b.attach(nav)
+
+    back = InlineKeyboardBuilder()
+    back.button(text="◀️ К группам", callback_data=f"admc_{group_id}_0")
+    b.attach(back)
+
+    await callback.message.edit_text(
+        f"🏫 Класс: <b>{group.class_name}</b> | 👥 Группа: <b>{group.group_name}</b>\n"
+        f"Выберите ученика (Стр. {page+1}/{total_pages}):", 
+        parse_mode="HTML", reply_markup=b.as_markup()
+    )
+
+# 5. Профиль ученика
+@admin_router.callback_query(F.data.startswith("adms_"))
+async def admin_student_profile(callback: types.CallbackQuery):
+    parts = callback.data.split("_")
+    student_id = int(parts[1])
+    group_id = int(parts[2])
+
+    async with SessionLocal() as session:
+        user = await session.get(User, student_id)
+        if not user:
+            return await callback.answer("Ученик не найден", show_alert=True)
+        
+        text = f"🔍 <b>Досье ученика:</b>\n"
+        text += f"Имя: {user.first_name or 'Нет'} {user.last_name or 'Нет'} (@{user.username or 'Нет'})\n"
+        text += f"Статус: {'🚫 Забанен' if user.is_banned else '✅ Активен'}\n"
+        text += f"🏫 Группа: {user.class_name or 'Нет'} - {user.group_name or 'Нет'}\n\n"
+        text += f"🔥 Дней подряд: {user.current_streak}\n"
+        text += f"✅ Всего решено заданий: {user.total_completed}\n"
+        text += f"🏆 Максимум заданий в день: {user.max_tasks_per_day}\n\n"
+        
+        subs = (await session.execute(
+            select(Submission, Task).join(Task, Submission.task_id == Task.id)
+            .where(Submission.student_id == user.id).order_by(Submission.id.desc()).limit(3)
+        )).all()
+        
+        text += "<b>Последние 3 выполненные задания:</b>\n"
+        if not subs: text += "<i>Пока нет ответов.</i>"
+        for sub, task in subs:
+            grade = f"Оценка: {sub.grade}" if sub.grade else "⏳ Не проверено"
+            text += f"• {task.topic} | {task.title} ({grade})\n"
+
+    b = InlineKeyboardBuilder()
+    b.button(text="◀️ К списку учеников", callback_data=f"admg_{group_id}_0")
+    b.adjust(1)
+
+    await callback.message.edit_text(text, parse_mode="HTML", reply_markup=b.as_markup())
+
+# ================= КОНЕЦ ИЕРАРХИИ =================
+
 
 @admin_router.callback_query(F.data.startswith("admin_"))
 async def admin_callbacks(callback: types.CallbackQuery, state: FSMContext):
@@ -99,7 +297,7 @@ async def admin_callbacks(callback: types.CallbackQuery, state: FSMContext):
         await state.set_state(AdminPanel.waiting_for_username_actions)
     await callback.answer()
 
-# ================= ДЕЙСТВИЯ ПОЛЬЗОВАТЕЛЯ =================
+# ================= ДЕЙСТВИЯ ПОЛЬЗОВАТЕЛЯ (РУЧНОЙ ПОИСК) =================
 @admin_router.message(AdminPanel.waiting_for_username_actions)
 async def check_user_actions(message: types.Message, state: FSMContext):
     username = message.text.replace("@", "")
@@ -158,7 +356,6 @@ async def process_broadcast(message: types.Message, state: FSMContext):
         users = (await session.execute(select(User).where(User.role == target, User.is_banned == False))).scalars().all()
         
     count = 0
-    prefix = "👨‍🎓" if target == "student" else "👨‍🏫"
     full_message = f"🔔 <b>Уведомление от Администрации:</b>\n\n{message.text}"
     
     for u in users:
