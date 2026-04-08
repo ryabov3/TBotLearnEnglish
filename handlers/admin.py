@@ -21,14 +21,14 @@ async def show_admin_panel(message: types.Message, is_edit: bool = False):
     builder = InlineKeyboardBuilder()
     builder.button(text="➕ Назначить учителя", callback_data="admin_add_teacher")
     builder.button(text="➖ Убрать учителя", callback_data="admin_rem_teacher")
-    # Перенаправляем кнопку на нашу новую систему навигации
     builder.button(text="👨‍🏫 Список учителей", callback_data="admtl_0") 
     builder.button(text="📢 Сообщение ученикам", callback_data="admin_broad_student")
     builder.button(text="📢 Сообщение учителям", callback_data="admin_broad_teacher")
+    builder.button(text="✉️ Личное сообщение", callback_data="admin_pml_0") # Новая кнопка
     builder.button(text="🔍 Действия пользователя", callback_data="admin_actions")
     builder.button(text="🔨 Забанить", callback_data="admin_ban")
     builder.button(text="🕊 Разбанить", callback_data="admin_unban")
-    builder.adjust(2, 1, 2, 1, 2)
+    builder.adjust(2, 1, 2, 1, 1, 2)
 
     text = "<b>🛠 Панель администратора</b>\nВыберите действие:"
     if is_edit:
@@ -267,6 +267,94 @@ async def admin_student_profile(callback: types.CallbackQuery):
     await callback.message.edit_text(text, parse_mode="HTML", reply_markup=b.as_markup())
 
 # ================= КОНЕЦ ИЕРАРХИИ =================
+
+# ================= ЛИЧНЫЕ СООБЩЕНИЯ =================
+@admin_router.callback_query(F.data.startswith("admin_pml_"))
+async def admin_pm_list(callback: types.CallbackQuery):
+    page = int(callback.data.split("_")[2])
+    per_page = 5
+    
+    async with SessionLocal() as session:
+        # Берем всех пользователей кроме самого админа
+        users = (await session.execute(
+            select(User).where(User.id != callback.from_user.id).order_by(User.role, User.id)
+        )).scalars().all()
+        
+    if not users:
+        b = InlineKeyboardBuilder()
+        b.button(text="◀️ В панель", callback_data="admin_back")
+        return await callback.message.edit_text("В базе данных пока нет других пользователей.", reply_markup=b.as_markup())
+
+    total_pages = max(1, (len(users) + per_page - 1) // per_page)
+    current_users = users[page*per_page : (page+1)*per_page]
+    
+    b = InlineKeyboardBuilder()
+    for u in current_users:
+        emoji = "👨‍🏫" if u.role in ["teacher", "admin"] else "👨‍🎓"
+        uname = f"(@{u.username})" if u.username else ""
+        name = f"{u.first_name or ''} {u.last_name or ''}".strip() or str(u.id)
+        btn_text = f"{emoji} {uname} {name}".strip()
+        b.button(text=btn_text, callback_data=f"admin_pmu_{u.id}")
+    b.adjust(1)
+    
+    nav = InlineKeyboardBuilder()
+    if page > 0: nav.button(text="⬅️ Пред.", callback_data=f"admin_pml_{page-1}")
+    if page < total_pages - 1: nav.button(text="След. ➡️", callback_data=f"admin_pml_{page+1}")
+    nav.adjust(2)
+    b.attach(nav)
+    
+    back = InlineKeyboardBuilder()
+    back.button(text="◀️ В панель", callback_data="admin_back")
+    b.attach(back)
+    
+    await callback.message.edit_text(
+        f"✉️ <b>Личные сообщения</b>\nВыберите пользователя для отправки сообщения (Стр. {page+1}/{total_pages}):", 
+        parse_mode="HTML", 
+        reply_markup=b.as_markup()
+    )
+
+@admin_router.callback_query(F.data.startswith("admin_pmu_"))
+async def admin_pm_user(callback: types.CallbackQuery, state: FSMContext):
+    user_id = int(callback.data.split("_")[2])
+    
+    async with SessionLocal() as session:
+        user = await session.get(User, user_id)
+        
+    if not user:
+        return await callback.answer("Ошибка: Пользователь не найден.", show_alert=True)
+        
+    await state.update_data(pm_target_id=user_id)
+    await state.set_state(AdminPanel.waiting_for_personal_message)
+    
+    b = InlineKeyboardBuilder()
+    b.button(text="❌ Отмена", callback_data="admin_pml_0")
+    
+    emoji = "👨‍🏫" if user.role in ["teacher", "admin"] else "👨‍🎓"
+    uname = f"(@{user.username})" if user.username else ""
+    name = f"{user.first_name or ''} {user.last_name or ''}".strip() or str(user.id)
+    
+    await callback.message.edit_text(
+        f"Напишите текст сообщения, которое будет отправлено пользователю:\n<b>{emoji} {uname} {name}</b>", 
+        parse_mode="HTML",
+        reply_markup=b.as_markup()
+    )
+
+@admin_router.message(AdminPanel.waiting_for_personal_message)
+async def process_personal_message(message: types.Message, state: FSMContext):
+    data = await state.get_data()
+    target_id = data.get("pm_target_id")
+    
+    full_message = f"🔔 <b>Администратор отправил Вам личное сообщение:</b>\n\n{message.text}"
+    
+    try:
+        await message.bot.send_message(target_id, full_message, parse_mode="HTML")
+        await message.answer("✅ Личное сообщение успешно доставлено!")
+    except Exception:
+        await message.answer("❌ Ошибка при отправке. Возможно, пользователь заблокировал бота или удалил аккаунт.")
+        
+    await state.clear()
+    await show_admin_panel(message, is_edit=False)
+# ================= КОНЕЦ ЛИЧНЫХ СООБЩЕНИЙ =================
 
 
 @admin_router.callback_query(F.data.startswith("admin_"))
