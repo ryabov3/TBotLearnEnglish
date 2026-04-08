@@ -15,8 +15,8 @@ class AdminPanel(StatesGroup):
     waiting_for_username_remove = State()
     waiting_for_username_ban = State()
     waiting_for_username_unban = State()
-    waiting_for_broadcast_text = State() # Для рассылки
-    waiting_for_username_actions = State() # Для проверки действий
+    waiting_for_broadcast_text = State() 
+    waiting_for_username_actions = State() 
 
 class TeacherGroup(StatesGroup):
     class_name = State()
@@ -38,6 +38,9 @@ class TeacherTask(StatesGroup):
     answer_type = State()
     add_more = State() 
     select_groups = State()
+
+class TeacherDeleteTask(StatesGroup):
+    selecting_topic = State() # Новое состояние для удаления темы
 
 class TeacherCheck(StatesGroup):
     waiting_for_grade = State()
