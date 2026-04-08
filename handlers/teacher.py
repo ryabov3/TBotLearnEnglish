@@ -3,11 +3,11 @@ from aiogram import Router, types, F
 from aiogram.filters import Command
 from aiogram.fsm.context import FSMContext
 from aiogram.utils.keyboard import InlineKeyboardBuilder
-from sqlalchemy import select
+from sqlalchemy import select, delete
 
 from database.engine import SessionLocal
 from database.models import User, StudyGroup, Task, Submission
-from states.states import TeacherGroup, TeacherTask, TeacherCheck, TeacherAddStudent, TeacherRemoveStudent
+from states.states import TeacherGroup, TeacherTask, TeacherCheck, TeacherAddStudent, TeacherRemoveStudent, TeacherDeleteTask
 
 teacher_router = Router()
 
@@ -36,12 +36,13 @@ async def teacher_menu_callback(callback: types.CallbackQuery, state: FSMContext
     
     builder = InlineKeyboardBuilder()
     builder.button(text="📝 Создать задание", callback_data="t_new_task")
+    builder.button(text="🗑 Удалить задание", callback_data="t_del_task_start") # <-- НОВАЯ КНОПКА ЗДЕСЬ
     
     if data.get("tasks_list") or data.get("topic"):
         builder.button(text="♻️ Продолжить создание темы", callback_data="t_resume_draft")
         
     builder.button(text="✅ Проверить ответы", callback_data="t_check_tasks_0")
-    builder.button(text="📋 Список классов", callback_data="t_lc_pg_0") # Новая кнопка
+    builder.button(text="📋 Список классов", callback_data="t_lc_pg_0") 
     builder.button(text="📊 Статистика", callback_data="t_st_pg_0")
     builder.button(text="➕ Создать группу", callback_data="t_add_group")
     builder.button(text="👤 Добавить ученика", callback_data="t_add_student")
@@ -50,7 +51,7 @@ async def teacher_menu_callback(callback: types.CallbackQuery, state: FSMContext
     await callback.message.edit_text("👨‍🏫 <b>Панель Учителя</b>\nВыберите действие:", parse_mode="HTML", reply_markup=builder.as_markup())
 
 
-# ================= 0. СПИСОК КЛАССОВ (НОВОЕ) =================
+# ================= 0. СПИСОК КЛАССОВ =================
 @teacher_router.callback_query(F.data.startswith("t_lc_pg_"))
 async def list_classes_pages(callback: types.CallbackQuery):
     page = int(callback.data.split("_")[-1])
@@ -260,7 +261,8 @@ async def rem_student_confirm(callback: types.CallbackQuery):
     await callback.answer("Ученик удален из группы!", show_alert=True)
     await show_rem_students_page(callback, group_id, 0)
 
-# ================= 3. СОЗДАНИЕ ЗАДАНИЙ (С ЧЕРНОВИКАМИ И ФОРМАТАМИ) =================
+
+# ================= 3. СОЗДАНИЕ ЗАДАНИЙ (С ВАЛИДАЦИЕЙ) =================
 
 @teacher_router.callback_query(F.data == "t_new_task")
 async def start_new_task(callback: types.CallbackQuery, state: FSMContext):
@@ -288,6 +290,14 @@ async def back_to_topic(callback: types.CallbackQuery, state: FSMContext):
 
 @teacher_router.message(TeacherTask.topic, F.text)
 async def task_topic(message: types.Message, state: FSMContext):
+    # Добавлена проверка на длину текста (макс 250 символов)
+    if len(message.text) > 250:
+        return await message.answer(
+            "❌ Название темы слишком длинное. Возможно, вы отправили описание задания в качестве названия.\n"
+            "Пожалуйста, отправьте более короткое название:",
+            reply_markup=get_cancel_or_back_t("t_back_to_topic")
+        )
+        
     await state.update_data(topic=message.text)
     await message.answer(f"Тема: <b>{message.text}</b>\n\nТеперь введи название <b>первого задания</b> внутри этой темы (например, 'Вопрос 1'):", parse_mode="HTML", reply_markup=get_cancel_or_back_t("t_back_to_topic"))
     await state.set_state(TeacherTask.title)
@@ -306,6 +316,14 @@ async def back_to_title(callback: types.CallbackQuery, state: FSMContext):
 
 @teacher_router.message(TeacherTask.title, F.text)
 async def task_title(message: types.Message, state: FSMContext):
+    # Добавлена проверка на длину текста (макс 250 символов)
+    if len(message.text) > 250:
+        return await message.answer(
+            "❌ Название задания слишком длинное. Возможно, вы отправили описание задания в качестве названия.\n"
+            "Пожалуйста, отправьте более короткое название:",
+            reply_markup=get_cancel_or_back_t("t_back_to_title")
+        )
+        
     await state.update_data(current_title=message.text)
     await message.answer("Напиши текстовое описание этого задания:", reply_markup=get_cancel_or_back_t("t_back_to_title"))
     await state.set_state(TeacherTask.description)
@@ -540,6 +558,115 @@ async def confirm_task(callback: types.CallbackQuery, state: FSMContext):
     builder = InlineKeyboardBuilder()
     builder.button(text="◀️ В меню", callback_data="t_menu")
     await callback.message.edit_text("✅ Тема со всеми заданиями успешно создана и разослана выбранным группам!", reply_markup=builder.as_markup())
+
+# ================= УДАЛЕНИЕ ЗАДАНИЯ (ТЕМЫ) =================
+@teacher_router.callback_query(F.data == "t_del_task_start")
+async def del_task_start(callback: types.CallbackQuery, state: FSMContext):
+    async with SessionLocal() as session:
+        # Получаем уникальные темы этого учителя
+        result = await session.execute(
+            select(Task.topic).where(Task.teacher_id == callback.from_user.id).distinct()
+        )
+        topics = result.scalars().all()
+
+    if not topics:
+        b = InlineKeyboardBuilder()
+        b.button(text="◀️ В меню", callback_data="t_menu")
+        return await callback.message.edit_text("У вас пока нет созданных заданий (тем).", reply_markup=b.as_markup())
+
+    await state.update_data(del_topics=topics)
+    await state.set_state(TeacherDeleteTask.selecting_topic)
+    await show_del_task_page(callback, 0, topics)
+
+@teacher_router.callback_query(TeacherDeleteTask.selecting_topic, F.data.startswith("t_del_pg_"))
+async def del_task_page(callback: types.CallbackQuery, state: FSMContext):
+    page = int(callback.data.split("_")[-1])
+    data = await state.get_data()
+    topics = data.get("del_topics", [])
+    await show_del_task_page(callback, page, topics)
+
+async def show_del_task_page(callback: types.CallbackQuery, page: int, topics: list):
+    per_page = 5
+    total_pages = max(1, (len(topics) + per_page - 1) // per_page)
+    current_topics = topics[page*per_page : (page+1)*per_page]
+
+    b = InlineKeyboardBuilder()
+    for i, topic in enumerate(current_topics):
+        idx = page * per_page + i
+        # Обрезаем название, если оно слишком длинное для кнопки
+        display_name = topic if len(topic) < 30 else topic[:30] + "..."
+        b.button(text=f"🗑 {display_name}", callback_data=f"t_del_t_{idx}")
+    b.adjust(1)
+
+    nav = InlineKeyboardBuilder()
+    if page > 0: nav.button(text="⬅️ Пред.", callback_data=f"t_del_pg_{page-1}")
+    if page < total_pages - 1: nav.button(text="След. ➡️", callback_data=f"t_del_pg_{page+1}")
+    nav.adjust(2)
+    b.attach(nav)
+
+    back = InlineKeyboardBuilder()
+    back.button(text="◀️ В меню", callback_data="t_menu")
+    b.attach(back)
+
+    await callback.message.edit_text(
+        f"Выберите тему для удаления (Страница {page+1} из {total_pages}):\n\n"
+        f"<i>⚠️ Внимание: удаление темы навсегда сотрет все задания в ней и удалит ответы (прогресс) учеников.</i>",
+        parse_mode="HTML",
+        reply_markup=b.as_markup()
+    )
+
+@teacher_router.callback_query(TeacherDeleteTask.selecting_topic, F.data.startswith("t_del_t_"))
+async def del_task_confirm(callback: types.CallbackQuery, state: FSMContext):
+    idx = int(callback.data.split("_")[-1])
+    data = await state.get_data()
+    topics = data.get("del_topics", [])
+    
+    if idx >= len(topics):
+        return await callback.answer("Ошибка. Тема не найдена.", show_alert=True)
+
+    topic_to_delete = topics[idx]
+    await state.update_data(topic_to_delete=topic_to_delete)
+
+    b = InlineKeyboardBuilder()
+    b.button(text="✅ Да, удалить навсегда", callback_data="t_del_task_yes")
+    b.button(text="❌ Отмена", callback_data="t_del_task_start")
+    b.adjust(1)
+
+    await callback.message.edit_text(
+        f"⚠️ Вы уверены, что хотите удалить тему <b>«{topic_to_delete}»</b>?\n\n"
+        f"Это действие <b>необратимо</b>: все подзадания и отправленные ответы учеников будут удалены из системы.",
+        parse_mode="HTML",
+        reply_markup=b.as_markup()
+    )
+
+@teacher_router.callback_query(TeacherDeleteTask.selecting_topic, F.data == "t_del_task_yes")
+async def del_task_execute(callback: types.CallbackQuery, state: FSMContext):
+    data = await state.get_data()
+    topic_to_delete = data.get("topic_to_delete")
+
+    if topic_to_delete:
+        async with SessionLocal() as session:
+            # Находим все ID задач этой темы у этого учителя
+            tasks_res = await session.execute(
+                select(Task.id).where(Task.teacher_id == callback.from_user.id, Task.topic == topic_to_delete)
+            )
+            task_ids = [row[0] for row in tasks_res.all()]
+
+            if task_ids:
+                # 1. Сначала удаляем все сабмиты (ответы учеников) по этим задачам
+                await session.execute(delete(Submission).where(Submission.task_id.in_(task_ids)))
+                # 2. Теперь удаляем сами задачи (тему и все подзадания)
+                await session.execute(delete(Task).where(Task.id.in_(task_ids)))
+                await session.commit()
+
+    await state.set_state(None)
+    b = InlineKeyboardBuilder()
+    b.button(text="◀️ В меню", callback_data="t_menu")
+    await callback.message.edit_text(
+        f"✅ Тема <b>«{topic_to_delete}»</b> и все ответы к ней были успешно удалены.", 
+        parse_mode="HTML", reply_markup=b.as_markup()
+    )
+
 
 # ================= 4. ПРОВЕРКА ЗАДАНИЙ =================
 @teacher_router.callback_query(F.data.startswith("t_check_tasks_"))
