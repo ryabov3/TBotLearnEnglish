@@ -36,12 +36,13 @@ async def teacher_menu_callback(callback: types.CallbackQuery, state: FSMContext
     
     builder = InlineKeyboardBuilder()
     builder.button(text="📝 Создать задание", callback_data="t_new_task")
-    builder.button(text="🗑 Удалить задание", callback_data="t_del_task_start") # <-- НОВАЯ КНОПКА ЗДЕСЬ
+    builder.button(text="🗑 Удалить задание", callback_data="t_del_task_start") 
     
     if data.get("tasks_list") or data.get("topic"):
         builder.button(text="♻️ Продолжить создание темы", callback_data="t_resume_draft")
         
     builder.button(text="✅ Проверить ответы", callback_data="t_check_tasks_0")
+    builder.button(text="👀 Проверенные задания", callback_data="t_chkd_pg_0") # <-- НОВАЯ КНОПКА
     builder.button(text="📋 Список классов", callback_data="t_lc_pg_0") 
     builder.button(text="📊 Статистика", callback_data="t_st_pg_0")
     builder.button(text="➕ Создать группу", callback_data="t_add_group")
@@ -290,7 +291,6 @@ async def back_to_topic(callback: types.CallbackQuery, state: FSMContext):
 
 @teacher_router.message(TeacherTask.topic, F.text)
 async def task_topic(message: types.Message, state: FSMContext):
-    # Добавлена проверка на длину текста (макс 250 символов)
     if len(message.text) > 250:
         return await message.answer(
             "❌ Название темы слишком длинное. Возможно, вы отправили описание задания в качестве названия.\n"
@@ -316,7 +316,6 @@ async def back_to_title(callback: types.CallbackQuery, state: FSMContext):
 
 @teacher_router.message(TeacherTask.title, F.text)
 async def task_title(message: types.Message, state: FSMContext):
-    # Добавлена проверка на длину текста (макс 250 символов)
     if len(message.text) > 250:
         return await message.answer(
             "❌ Название задания слишком длинное. Возможно, вы отправили описание задания в качестве названия.\n"
@@ -388,7 +387,6 @@ async def process_answer_type(callback: types.CallbackQuery, state: FSMContext):
     data = await state.get_data()
     tasks_list = data.get('tasks_list', [])
     
-    # Теперь сохраняем задание в список со всеми параметрами
     tasks_list.append({
         'title': data['current_title'],
         'description': data['current_description'],
@@ -554,7 +552,7 @@ async def confirm_task(callback: types.CallbackQuery, state: FSMContext):
                 session.add(new_task)
         await session.commit()
         
-    await state.clear() # Полностью очищаем память (черновик удален)
+    await state.clear() 
     builder = InlineKeyboardBuilder()
     builder.button(text="◀️ В меню", callback_data="t_menu")
     await callback.message.edit_text("✅ Тема со всеми заданиями успешно создана и разослана выбранным группам!", reply_markup=builder.as_markup())
@@ -563,7 +561,6 @@ async def confirm_task(callback: types.CallbackQuery, state: FSMContext):
 @teacher_router.callback_query(F.data == "t_del_task_start")
 async def del_task_start(callback: types.CallbackQuery, state: FSMContext):
     async with SessionLocal() as session:
-        # Получаем уникальные темы этого учителя
         result = await session.execute(
             select(Task.topic).where(Task.teacher_id == callback.from_user.id).distinct()
         )
@@ -593,7 +590,6 @@ async def show_del_task_page(callback: types.CallbackQuery, page: int, topics: l
     b = InlineKeyboardBuilder()
     for i, topic in enumerate(current_topics):
         idx = page * per_page + i
-        # Обрезаем название, если оно слишком длинное для кнопки
         display_name = topic if len(topic) < 30 else topic[:30] + "..."
         b.button(text=f"🗑 {display_name}", callback_data=f"t_del_t_{idx}")
     b.adjust(1)
@@ -646,16 +642,13 @@ async def del_task_execute(callback: types.CallbackQuery, state: FSMContext):
 
     if topic_to_delete:
         async with SessionLocal() as session:
-            # Находим все ID задач этой темы у этого учителя
             tasks_res = await session.execute(
                 select(Task.id).where(Task.teacher_id == callback.from_user.id, Task.topic == topic_to_delete)
             )
             task_ids = [row[0] for row in tasks_res.all()]
 
             if task_ids:
-                # 1. Сначала удаляем все сабмиты (ответы учеников) по этим задачам
                 await session.execute(delete(Submission).where(Submission.task_id.in_(task_ids)))
-                # 2. Теперь удаляем сами задачи (тему и все подзадания)
                 await session.execute(delete(Task).where(Task.id.in_(task_ids)))
                 await session.commit()
 
@@ -668,7 +661,7 @@ async def del_task_execute(callback: types.CallbackQuery, state: FSMContext):
     )
 
 
-# ================= 4. ПРОВЕРКА ЗАДАНИЙ =================
+# ================= 4. ПРОВЕРКА ЗАДАНИЙ (ИЗМЕНЕНО) =================
 @teacher_router.callback_query(F.data.startswith("t_check_tasks_"))
 async def check_tasks_groups(callback: types.CallbackQuery):
     page = int(callback.data.split("_")[-1])
@@ -708,19 +701,24 @@ async def check_tasks_in_group(callback: types.CallbackQuery):
     group_id = int(callback.data.split("_")[-1])
     async with SessionLocal() as session:
         group = await session.get(StudyGroup, group_id)
+        
+        # Ищем только те задания, у которых ЕСТЬ непроверенные ответы
         result = await session.execute(
-            select(Task).where(
+            select(Task)
+            .join(Submission, Submission.task_id == Task.id)
+            .where(
                 Task.class_name == group.class_name,
                 Task.group_name == group.group_name,
-                Task.teacher_id == callback.from_user.id
-            ).order_by(Task.topic, Task.id)
+                Task.teacher_id == callback.from_user.id,
+                Submission.grade == None
+            ).distinct().order_by(Task.topic, Task.id)
         )
         tasks = result.scalars().all()
 
     builder = InlineKeyboardBuilder()
     if not tasks:
         builder.button(text="◀️ Назад к группам", callback_data="t_check_tasks_0")
-        return await callback.message.edit_text(f"В группе <b>{group.class_name} - {group.group_name}</b> нет заданий.", parse_mode="HTML", reply_markup=builder.as_markup())
+        return await callback.message.edit_text("Новых заданий на проверку пока нет.", reply_markup=builder.as_markup())
 
     for t in tasks:
         builder.button(text=f"📌 {t.topic} | {t.title}", callback_data=f"t_chk_t_{t.id}")
@@ -817,7 +815,6 @@ async def process_grade(message: types.Message, state: FSMContext):
     await message.answer("Теперь напиши комментарий к оценке для ученика:", reply_markup=get_cancel_t())
     await state.set_state(TeacherCheck.waiting_for_comment)
 
-# Если ввели не число от 1 до 5
 @teacher_router.message(TeacherCheck.waiting_for_grade)
 async def process_grade_invalid(message: types.Message):
     await message.answer("❌ Ошибка! Оценкой может быть только число от 1 до 5.\n\nПожалуйста, отправьте корректную оценку:")
@@ -840,6 +837,164 @@ async def process_comment(message: types.Message, state: FSMContext):
     builder.adjust(1)
     
     await message.answer("✅ Оценка и комментарий сохранены!", reply_markup=builder.as_markup())
+
+# ================= 4.1. ПРОВЕРЕННЫЕ ЗАДАНИЯ (НОВОЕ) =================
+@teacher_router.callback_query(F.data.startswith("t_chkd_pg_"))
+async def checked_tasks_groups(callback: types.CallbackQuery):
+    page = int(callback.data.split("_")[-1])
+    per_page = 5
+    
+    async with SessionLocal() as session:
+        groups = (await session.execute(select(StudyGroup).where(StudyGroup.teacher_id == callback.from_user.id))).scalars().all()
+
+    if not groups:
+        b = InlineKeyboardBuilder()
+        b.button(text="◀️ В меню", callback_data="t_menu")
+        return await callback.message.edit_text("У вас пока нет созданных групп.", reply_markup=b.as_markup())
+
+    total_pages = max(1, (len(groups) + per_page - 1) // per_page)
+    current_groups = groups[page*per_page : (page+1)*per_page]
+
+    b = InlineKeyboardBuilder()
+    for g in current_groups:
+        b.button(text=f"📂 {g.class_name} - {g.group_name}", callback_data=f"t_chkd_g_{g.id}")
+    b.adjust(1)
+    
+    nav = InlineKeyboardBuilder()
+    if page > 0: nav.button(text="⬅️ Пред.", callback_data=f"t_chkd_pg_{page-1}")
+    if page < total_pages - 1: nav.button(text="След. ➡️", callback_data=f"t_chkd_pg_{page+1}")
+    nav.adjust(2)
+    b.attach(nav)
+    
+    back = InlineKeyboardBuilder()
+    back.button(text="🏠 В меню", callback_data="t_menu")
+    b.attach(back)
+
+    await callback.message.edit_text(f"👀 <b>Проверенные задания</b>\nВыберите группу (Стр. {page+1}/{total_pages}):", parse_mode="HTML", reply_markup=b.as_markup())
+
+
+@teacher_router.callback_query(F.data.startswith("t_chkd_g_"))
+async def checked_tasks_in_group(callback: types.CallbackQuery):
+    group_id = int(callback.data.split("_")[-1])
+    async with SessionLocal() as session:
+        group = await session.get(StudyGroup, group_id)
+        tasks = (await session.execute(
+            select(Task).where(
+                Task.class_name == group.class_name,
+                Task.group_name == group.group_name,
+                Task.teacher_id == callback.from_user.id
+            ).order_by(Task.topic, Task.id)
+        )).scalars().all()
+
+    b = InlineKeyboardBuilder()
+    if not tasks:
+        b.button(text="◀️ Назад к группам", callback_data="t_chkd_pg_0")
+        return await callback.message.edit_text(f"В группе <b>{group.class_name} - {group.group_name}</b> нет заданий.", parse_mode="HTML", reply_markup=b.as_markup())
+
+    for t in tasks:
+        b.button(text=f"📌 {t.topic} | {t.title}", callback_data=f"t_chkd_t_{group_id}_{t.id}_0")
+    b.adjust(1)
+
+    back = InlineKeyboardBuilder()
+    back.button(text="◀️ Назад", callback_data="t_chkd_pg_0")
+    b.attach(back)
+
+    await callback.message.edit_text(f"Группа: <b>{group.class_name} - {group.group_name}</b>\nВыберите задание для просмотра:", parse_mode="HTML", reply_markup=b.as_markup())
+
+
+@teacher_router.callback_query(F.data.startswith("t_chkd_t_"))
+async def checked_tasks_students(callback: types.CallbackQuery):
+    parts = callback.data.split("_")
+    group_id = int(parts[3])
+    task_id = int(parts[4])
+    page = int(parts[5])
+    per_page = 5
+    
+    async with SessionLocal() as session:
+        task = await session.get(Task, task_id)
+        
+        students = (await session.execute(
+            select(User).where(
+                User.class_name == task.class_name,
+                User.group_name == task.group_name,
+                User.role == "student"
+            )
+        )).scalars().all()
+        
+        subs_res = await session.execute(select(Submission).where(Submission.task_id == task_id))
+        submissions = {s.student_id: s for s in subs_res.scalars().all()}
+        
+    b = InlineKeyboardBuilder()
+    
+    if not students:
+        b.button(text="◀️ Назад", callback_data=f"t_chkd_g_{group_id}")
+        return await callback.message.edit_text("В этой группе пока нет учеников.", reply_markup=b.as_markup())
+
+    total_pages = max(1, (len(students) + per_page - 1) // per_page)
+    current_students = students[page*per_page : (page+1)*per_page]
+
+    for s in current_students:
+        sub = submissions.get(s.id)
+        if sub and sub.grade is not None:
+            mark = "✅"
+            cb_data = f"t_chkd_s_{sub.id}_{group_id}_{task_id}"
+        else:
+            mark = "❌"
+            cb_data = "t_chkd_ns"
+            
+        name = f"{s.first_name or ''} {s.last_name or ''}".strip() or s.username or str(s.id)
+        b.button(text=f"{mark} {name}", callback_data=cb_data)
+    b.adjust(1)
+
+    nav = InlineKeyboardBuilder()
+    if page > 0: nav.button(text="⬅️ Пред.", callback_data=f"t_chkd_t_{group_id}_{task_id}_{page-1}")
+    if page < total_pages - 1: nav.button(text="След. ➡️", callback_data=f"t_chkd_t_{group_id}_{task_id}_{page+1}")
+    nav.adjust(2)
+    b.attach(nav)
+
+    back = InlineKeyboardBuilder()
+    back.button(text="◀️ К заданиям", callback_data=f"t_chkd_g_{group_id}")
+    b.attach(back)
+
+    await callback.message.edit_text(
+        f"📝 <b>Задание:</b> {task.title}\nВыберите ученика (Стр. {page+1}/{total_pages}):", 
+        parse_mode="HTML", reply_markup=b.as_markup()
+    )
+
+
+@teacher_router.callback_query(F.data == "t_chkd_ns")
+async def checked_tasks_not_submitted(callback: types.CallbackQuery):
+    await callback.answer("Работа данного ученика пока не проверена или еще не сдана.", show_alert=True)
+
+
+@teacher_router.callback_query(F.data.startswith("t_chkd_s_"))
+async def checked_tasks_submission(callback: types.CallbackQuery):
+    parts = callback.data.split("_")
+    sub_id = int(parts[3])
+    group_id = int(parts[4])
+    task_id = int(parts[5])
+    
+    async with SessionLocal() as session:
+        result = await session.execute(
+            select(Submission, Task)
+            .join(Task, Submission.task_id == Task.id)
+            .where(Submission.id == sub_id)
+        )
+        sub, task = result.first()
+
+        text = (
+            f"Тема: <b>{task.topic}</b>\n"
+            f"📝 <b>Задание:</b> {task.title}\n"
+            f"📖 <b>Описание:</b> {task.description}\n\n"
+            f"⭐️ <b>Оценка ученика:</b> {sub.grade}\n"
+            f"👨‍🏫 <b>Ваш комментарий:</b> {sub.teacher_comment or 'Нет комментария'}"
+        )
+        
+    b = InlineKeyboardBuilder()
+    b.button(text="◀️ К списку учеников", callback_data=f"t_chkd_t_{group_id}_{task_id}_0")
+    b.adjust(1)
+    await callback.message.edit_text(text, parse_mode="HTML", reply_markup=b.as_markup())
+
 
 # ================= 5. СТАТИСТИКА =================
 @teacher_router.callback_query(F.data.startswith("t_st_pg_"))

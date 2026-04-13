@@ -22,11 +22,9 @@ async def send_role_panel(message: types.Message, role: str, is_edit: bool = Fal
     builder = InlineKeyboardBuilder()
     if role in ["teacher", "admin"]:
         builder.button(text="📝 Создать задание", callback_data="t_new_task")
-        builder.button(text="🗑 Удалить задание", callback_data="t_del_task_start") # <-- НОВАЯ КНОПКА
-        
-        # Кнопка продолжения черновика появится только в меню колбэка t_menu (см teacher.py)
-        
+        builder.button(text="🗑 Удалить задание", callback_data="t_del_task_start")
         builder.button(text="✅ Проверить ответы", callback_data="t_check_tasks_0")
+        builder.button(text="👀 Проверенные задания", callback_data="t_chkd_pg_0") 
         builder.button(text="📋 Список классов", callback_data="t_lc_pg_0") 
         builder.button(text="📊 Статистика", callback_data="t_st_pg_0")
         builder.button(text="➕ Создать группу", callback_data="t_add_group")
@@ -53,7 +51,7 @@ async def send_role_panel(message: types.Message, role: str, is_edit: bool = Fal
 # ================= РЕГИСТРАЦИЯ И СТАРТ =================
 @student_router.message(CommandStart())
 async def cmd_start(message: types.Message, state: FSMContext):
-    await state.set_state(None) # Не удаляем память (черновик), просто обнуляем шаг
+    await state.set_state(None) 
     async with SessionLocal() as session:
         user = await session.get(User, message.from_user.id)
         username = message.from_user.username or "Без_юзернейма"
@@ -134,7 +132,7 @@ async def reg_confirm_no(callback: types.CallbackQuery, state: FSMContext):
 # ================= МЕНЮ И ПРОФИЛЬ =================
 @student_router.message(Command("menu"))
 async def cmd_menu(message: types.Message, state: FSMContext):
-    await state.set_state(None) # Не удаляем черновики из памяти
+    await state.set_state(None) 
     async with SessionLocal() as session:
         user = await session.get(User, message.from_user.id)
         if user and not user.is_banned:
@@ -545,5 +543,4 @@ async def send_answer_to_db(callback: types.CallbackQuery, state: FSMContext):
             reply_markup=builder.as_markup(),
         )
     
-    # Задание выполнено, обнуляем память выполнения задания
     await state.set_state(None)
