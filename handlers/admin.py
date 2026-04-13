@@ -24,11 +24,12 @@ async def show_admin_panel(message: types.Message, is_edit: bool = False):
     builder.button(text="👨‍🏫 Список учителей", callback_data="admtl_0") 
     builder.button(text="📢 Сообщение ученикам", callback_data="admin_broad_student")
     builder.button(text="📢 Сообщение учителям", callback_data="admin_broad_teacher")
-    builder.button(text="✉️ Личное сообщение", callback_data="admin_pml_0") # Новая кнопка
-    builder.button(text="🔍 Действия пользователя", callback_data="admin_actions")
+    builder.button(text="✉️ Личное сообщение", callback_data="admin_pml_0") 
+    builder.button(text="🔍 Действия пользователя", callback_data="adm_actl_0") # <-- ИЗМЕНЕНО
+    builder.button(text="✂️ Отвязать от группы", callback_data="adm_unl_0") # <-- НОВАЯ КНОПКА
     builder.button(text="🔨 Забанить", callback_data="admin_ban")
     builder.button(text="🕊 Разбанить", callback_data="admin_unban")
-    builder.adjust(2, 1, 2, 1, 1, 2)
+    builder.adjust(2, 1, 2, 1, 2, 2)
 
     text = "<b>🛠 Панель администратора</b>\nВыберите действие:"
     if is_edit:
@@ -50,14 +51,12 @@ async def admin_back(callback: types.CallbackQuery, state: FSMContext):
 
 # ================= 👨‍🏫 ИЕРАРХИЯ: УЧИТЕЛЯ -> КЛАССЫ -> ГРУППЫ -> УЧЕНИКИ =================
 
-# 1. Список учителей
 @admin_router.callback_query(F.data.startswith("admtl_"))
 async def admin_list_teachers_pg(callback: types.CallbackQuery):
     page = int(callback.data.split("_")[1])
     per_page = 5
     
     async with SessionLocal() as session:
-        # Берем и учителей и админов (так как админы тоже могут создавать группы)
         teachers = (await session.execute(select(User).where(User.role.in_(["teacher", "admin"])))).scalars().all()
 
     if not teachers:
@@ -86,7 +85,7 @@ async def admin_list_teachers_pg(callback: types.CallbackQuery):
 
     await callback.message.edit_text(f"👨‍🏫 <b>Список учителей</b> (Стр. {page+1}/{total_pages}):\nВыберите учителя:", parse_mode="HTML", reply_markup=b.as_markup())
 
-# 2. Список классов конкретного учителя
+
 @admin_router.callback_query(F.data.startswith("admt_"))
 async def admin_list_classes_pg(callback: types.CallbackQuery):
     parts = callback.data.split("_")
@@ -98,7 +97,6 @@ async def admin_list_classes_pg(callback: types.CallbackQuery):
         teacher = await session.get(User, teacher_id)
         groups = (await session.execute(select(StudyGroup).where(StudyGroup.teacher_id == teacher_id))).scalars().all()
 
-    # Фильтруем только уникальные классы (убираем дубликаты групп)
     unique_classes = {}
     for g in groups:
         if g.class_name not in unique_classes:
@@ -132,7 +130,7 @@ async def admin_list_classes_pg(callback: types.CallbackQuery):
     t_name = f"{teacher.first_name or ''} {teacher.last_name or ''}".strip() or teacher.username or "Учитель"
     await callback.message.edit_text(f"👨‍🏫 Учитель: <b>{t_name}</b>\n🏫 Выберите класс (Стр. {page+1}/{total_pages}):", parse_mode="HTML", reply_markup=b.as_markup())
 
-# 3. Список групп в классе
+
 @admin_router.callback_query(F.data.startswith("admc_"))
 async def admin_list_groups_pg(callback: types.CallbackQuery):
     parts = callback.data.split("_")
@@ -145,7 +143,6 @@ async def admin_list_groups_pg(callback: types.CallbackQuery):
         if not base_group:
             return await callback.answer("Ошибка: Класс не найден", show_alert=True)
         
-        # Ищем все группы для этого учителя и этого названия класса
         groups = (await session.execute(
             select(StudyGroup).where(
                 StudyGroup.teacher_id == base_group.teacher_id, 
@@ -178,7 +175,7 @@ async def admin_list_groups_pg(callback: types.CallbackQuery):
 
     await callback.message.edit_text(f"🏫 Класс: <b>{base_group.class_name}</b>\n👥 Выберите группу (Стр. {page+1}/{total_pages}):", parse_mode="HTML", reply_markup=b.as_markup())
 
-# 4. Список учеников в группе
+
 @admin_router.callback_query(F.data.startswith("admg_"))
 async def admin_list_students_pg(callback: types.CallbackQuery):
     parts = callback.data.split("_")
@@ -229,7 +226,7 @@ async def admin_list_students_pg(callback: types.CallbackQuery):
         parse_mode="HTML", reply_markup=b.as_markup()
     )
 
-# 5. Профиль ученика
+
 @admin_router.callback_query(F.data.startswith("adms_"))
 async def admin_student_profile(callback: types.CallbackQuery):
     parts = callback.data.split("_")
@@ -266,7 +263,6 @@ async def admin_student_profile(callback: types.CallbackQuery):
 
     await callback.message.edit_text(text, parse_mode="HTML", reply_markup=b.as_markup())
 
-# ================= КОНЕЦ ИЕРАРХИИ =================
 
 # ================= ЛИЧНЫЕ СООБЩЕНИЯ =================
 @admin_router.callback_query(F.data.startswith("admin_pml_"))
@@ -275,7 +271,6 @@ async def admin_pm_list(callback: types.CallbackQuery):
     per_page = 5
     
     async with SessionLocal() as session:
-        # Берем всех пользователей кроме самого админа
         users = (await session.execute(
             select(User).where(User.id != callback.from_user.id).order_by(User.role, User.id)
         )).scalars().all()
@@ -354,52 +349,59 @@ async def process_personal_message(message: types.Message, state: FSMContext):
         
     await state.clear()
     await show_admin_panel(message, is_edit=False)
-# ================= КОНЕЦ ЛИЧНЫХ СООБЩЕНИЙ =================
 
+# ================= ДЕЙСТВИЯ ПОЛЬЗОВАТЕЛЯ (ИЗМЕНЕНО НА КНОПКИ) =================
+@admin_router.callback_query(F.data.startswith("adm_actl_"))
+async def admin_actions_list(callback: types.CallbackQuery):
+    page = int(callback.data.split("_")[-1])
+    per_page = 5
+    async with SessionLocal() as session:
+        users = (await session.execute(select(User).order_by(User.id))).scalars().all()
 
-@admin_router.callback_query(F.data.startswith("admin_"))
-async def admin_callbacks(callback: types.CallbackQuery, state: FSMContext):
-    action = callback.data
-    if action == "admin_add_teacher":
-        await callback.message.edit_text("Введите @юзернейм пользователя для назначения учителем:", reply_markup=get_cancel_admin())
-        await state.set_state(AdminPanel.waiting_for_username_teacher)
-    elif action == "admin_rem_teacher":
-        await callback.message.edit_text("Введите @юзернейм для снятия роли учителя:", reply_markup=get_cancel_admin())
-        await state.set_state(AdminPanel.waiting_for_username_remove)
-    elif action == "admin_ban":
-        await callback.message.edit_text("Введите @юзернейм для бана:", reply_markup=get_cancel_admin())
-        await state.set_state(AdminPanel.waiting_for_username_ban)
-    elif action == "admin_unban":
-        await callback.message.edit_text("Введите @юзернейм для разбана:", reply_markup=get_cancel_admin())
-        await state.set_state(AdminPanel.waiting_for_username_unban)
-    elif action == "admin_broad_student":
-        await state.update_data(broadcast_target="student")
-        await callback.message.edit_text("Напишите сообщение, которое будет отправлено <b>всем ученикам</b>:", parse_mode="HTML", reply_markup=get_cancel_admin())
-        await state.set_state(AdminPanel.waiting_for_broadcast_text)
-    elif action == "admin_broad_teacher":
-        await state.update_data(broadcast_target="teacher")
-        await callback.message.edit_text("Напишите сообщение, которое будет отправлено <b>всем учителям</b>:", parse_mode="HTML", reply_markup=get_cancel_admin())
-        await state.set_state(AdminPanel.waiting_for_broadcast_text)
-    elif action == "admin_actions":
-        await callback.message.edit_text("Введите @юзернейм пользователя (учителя или ученика), чтобы просмотреть его профиль и действия:", reply_markup=get_cancel_admin())
-        await state.set_state(AdminPanel.waiting_for_username_actions)
-    await callback.answer()
+    if not users:
+        b = InlineKeyboardBuilder()
+        b.button(text="◀️ В панель", callback_data="admin_back")
+        return await callback.message.edit_text("Пользователей нет в базе данных.", reply_markup=b.as_markup())
 
-# ================= ДЕЙСТВИЯ ПОЛЬЗОВАТЕЛЯ (РУЧНОЙ ПОИСК) =================
-@admin_router.message(AdminPanel.waiting_for_username_actions)
-async def check_user_actions(message: types.Message, state: FSMContext):
-    username = message.text.replace("@", "")
+    total_pages = max(1, (len(users) + per_page - 1) // per_page)
+    current_users = users[page*per_page : (page+1)*per_page]
+
+    b = InlineKeyboardBuilder()
+    for u in current_users:
+        emoji = "👨‍🏫" if u.role in ["teacher", "admin"] else "👨‍🎓"
+        uname = f"(@{u.username})" if u.username else ""
+        name = f"{u.first_name or ''} {u.last_name or ''}".strip() or str(u.id)
+        b.button(text=f"{emoji} {uname} {name}".strip(), callback_data=f"adm_actu_{u.id}")
+    b.adjust(1)
+
+    nav = InlineKeyboardBuilder()
+    if page > 0: nav.button(text="⬅️ Пред.", callback_data=f"adm_actl_{page-1}")
+    if page < total_pages - 1: nav.button(text="След. ➡️", callback_data=f"adm_actl_{page+1}")
+    nav.adjust(2)
+    b.attach(nav)
+
+    back = InlineKeyboardBuilder()
+    back.button(text="◀️ В панель", callback_data="admin_back")
+    b.attach(back)
+
+    await callback.message.edit_text(
+        f"🔍 <b>Действия пользователей</b>\nВыберите пользователя (Стр. {page+1}/{total_pages}):", 
+        parse_mode="HTML", reply_markup=b.as_markup()
+    )
+
+@admin_router.callback_query(F.data.startswith("adm_actu_"))
+async def admin_actions_user(callback: types.CallbackQuery):
+    user_id = int(callback.data.split("_")[-1])
     builder = InlineKeyboardBuilder()
-    builder.button(text="◀️ В панель", callback_data="admin_back")
+    builder.button(text="◀️ Назад к списку", callback_data="adm_actl_0")
     
     async with SessionLocal() as session:
-        user = (await session.execute(select(User).where(User.username == username))).scalar_one_or_none()
-        
+        user = await session.get(User, user_id)
         if not user:
-            return await message.answer(f"❌ Пользователь @{username} не найден в базе данных.", reply_markup=builder.as_markup())
+            return await callback.answer("Ошибка: Пользователь не найден", show_alert=True)
             
         text = f"🔍 <b>Досье на пользователя:</b>\n"
-        text += f"Имя: {user.first_name} {user.last_name} (@{username})\n"
+        text += f"Имя: {user.first_name or 'Нет'} {user.last_name or 'Нет'} (@{user.username or 'нет'})\n"
         text += f"Роль: <b>{user.role.upper()}</b>\n"
         text += f"Статус: {'🚫 Забанен' if user.is_banned else '✅ Активен'}\n\n"
         
@@ -431,8 +433,94 @@ async def check_user_actions(message: types.Message, state: FSMContext):
             for g in groups:
                 text += f"• {g.class_name} - {g.group_name}\n"
 
-    await message.answer(text, parse_mode="HTML", reply_markup=builder.as_markup())
-    await state.clear()
+    await callback.message.edit_text(text, parse_mode="HTML", reply_markup=builder.as_markup())
+
+
+# ================= ОТВЯЗАТЬ УЧЕНИКА ОТ ГРУППЫ =================
+@admin_router.callback_query(F.data.startswith("adm_unl_"))
+async def admin_unlink_list(callback: types.CallbackQuery):
+    if callback.data == "adm_unl_0" or callback.data.startswith("adm_unl_"):
+        try:
+            page = int(callback.data.split("_")[-1])
+        except:
+            page = 0
+            
+    per_page = 5
+    async with SessionLocal() as session:
+        # Ищем только учеников, которые состоят в классе
+        students = (await session.execute(
+            select(User).where(User.role == "student", User.class_name != None)
+        )).scalars().all()
+
+    if not students:
+        b = InlineKeyboardBuilder()
+        b.button(text="◀️ В панель", callback_data="admin_back")
+        return await callback.message.edit_text("Нет учеников, привязанных к группам.", reply_markup=b.as_markup())
+
+    total_pages = max(1, (len(students) + per_page - 1) // per_page)
+    current_students = students[page*per_page : (page+1)*per_page]
+
+    b = InlineKeyboardBuilder()
+    for s in current_students:
+        name = f"👤 {s.first_name or ''} ({s.class_name}-{s.group_name})".strip()
+        b.button(text=name, callback_data=f"adm_unlu_{s.id}")
+    b.adjust(1)
+
+    nav = InlineKeyboardBuilder()
+    if page > 0: nav.button(text="⬅️ Пред.", callback_data=f"adm_unl_{page-1}")
+    if page < total_pages - 1: nav.button(text="След. ➡️", callback_data=f"adm_unl_{page+1}")
+    nav.adjust(2)
+    b.attach(nav)
+
+    back = InlineKeyboardBuilder()
+    back.button(text="◀️ В панель", callback_data="admin_back")
+    b.attach(back)
+
+    await callback.message.edit_text(
+        f"✂️ <b>Отвязать от группы</b>\nВыберите ученика (Стр. {page+1}/{total_pages}):", 
+        parse_mode="HTML", reply_markup=b.as_markup()
+    )
+
+@admin_router.callback_query(F.data.startswith("adm_unlu_"))
+async def admin_unlink_user(callback: types.CallbackQuery):
+    user_id = int(callback.data.split("_")[-1])
+    async with SessionLocal() as session:
+        student = await session.get(User, user_id)
+        if student:
+            student.class_name = None
+            student.group_name = None
+            await session.commit()
+            
+    await callback.answer("Ученик успешно отвязан от группы!", show_alert=True)
+    await admin_unlink_list(callback) # Обновляем страницу
+
+
+# ================= СТАНДАРТНЫЕ КОЛБЕКИ (УПРАВЛЕНИЕ РОЛЯМИ) =================
+@admin_router.callback_query(F.data.startswith("admin_"))
+async def admin_callbacks(callback: types.CallbackQuery, state: FSMContext):
+    action = callback.data
+    if action == "admin_add_teacher":
+        await callback.message.edit_text("Введите @юзернейм пользователя для назначения учителем:", reply_markup=get_cancel_admin())
+        await state.set_state(AdminPanel.waiting_for_username_teacher)
+    elif action == "admin_rem_teacher":
+        await callback.message.edit_text("Введите @юзернейм для снятия роли учителя:", reply_markup=get_cancel_admin())
+        await state.set_state(AdminPanel.waiting_for_username_remove)
+    elif action == "admin_ban":
+        await callback.message.edit_text("Введите @юзернейм для бана:", reply_markup=get_cancel_admin())
+        await state.set_state(AdminPanel.waiting_for_username_ban)
+    elif action == "admin_unban":
+        await callback.message.edit_text("Введите @юзернейм для разбана:", reply_markup=get_cancel_admin())
+        await state.set_state(AdminPanel.waiting_for_username_unban)
+    elif action == "admin_broad_student":
+        await state.update_data(broadcast_target="student")
+        await callback.message.edit_text("Напишите сообщение, которое будет отправлено <b>всем ученикам</b>:", parse_mode="HTML", reply_markup=get_cancel_admin())
+        await state.set_state(AdminPanel.waiting_for_broadcast_text)
+    elif action == "admin_broad_teacher":
+        await state.update_data(broadcast_target="teacher")
+        await callback.message.edit_text("Напишите сообщение, которое будет отправлено <b>всем учителям</b>:", parse_mode="HTML", reply_markup=get_cancel_admin())
+        await state.set_state(AdminPanel.waiting_for_broadcast_text)
+    await callback.answer()
+
 
 # ================= РАССЫЛКА =================
 @admin_router.message(AdminPanel.waiting_for_broadcast_text)
