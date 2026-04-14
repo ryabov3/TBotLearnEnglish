@@ -10,7 +10,7 @@ from aiogram.filters import Command
 from aiogram.types import BotCommand, TelegramObject, Update
 from aiogram.client.session.aiohttp import AiohttpSession
 
-import config
+import config.config as config
 from database.engine import SessionLocal
 from database.models import User
 

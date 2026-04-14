@@ -10,7 +10,7 @@ from alembic import context
 # Указываем путь к нашему проекту
 sys.path.append(os.path.dirname(os.path.dirname(__file__)))
 
-import config as env_config
+import config.config as env_config
 from database.models import Base
 
 config = context.config

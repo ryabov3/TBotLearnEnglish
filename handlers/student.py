@@ -6,7 +6,7 @@ from aiogram.utils.keyboard import InlineKeyboardBuilder
 from sqlalchemy import select
 from datetime import date, timedelta
 
-from config import ADMINS_ID
+from config.config import ADMINS_ID
 from database.engine import SessionLocal
 from database.models import User, Task, Submission
 from states.states import StudentTask, Registration, ChangeProfile
