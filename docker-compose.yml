@@ -1,0 +1,76 @@
+version: "3.8"
+
+services:
+  # 1. Наша база данных MySQL
+  db:
+    image: mysql:8.0
+    container_name: tbot_mysql
+    restart: always
+    environment:
+      MYSQL_ROOT_PASSWORD: ${DB_PASSWORD}
+      MYSQL_DATABASE: ${DB_NAME}
+    ports:
+      - "3306:3306"
+    volumes:
+      - db_data:/var/lib/mysql
+
+  adminer:
+    image: adminer:latest
+    container_name: tbot_adminer
+    restart: always
+    ports:
+      - "8080:8080"
+    depends_on:
+      - db
+
+  mongodb:
+    image: mongo:5.0
+    container_name: tbot_mongo
+    restart: always
+    volumes:
+      - mongo_data:/data/db
+
+  opensearch:
+    image: opensearchproject/opensearch:2.12.0
+    container_name: tbot_opensearch
+    restart: always
+    environment:
+      - "discovery.type=single-node"
+      - "DISABLE_INSTALL_PLUGIN_CHECKS=true"
+      - "plugins.security.disabled=true"
+      - "OPENSEARCH_JAVA_OPTS=-Xms512m -Xmx512m"
+      - "OPENSEARCH_INITIAL_ADMIN_PASSWORD=${OPENSEARCH_PASSWORD}"
+    volumes:
+      - os_data:/usr/share/opensearch/data
+
+  graylog:
+    image: graylog/graylog:5.2
+    container_name: tbot_graylog
+    restart: always
+    environment:
+      - GRAYLOG_PASSWORD_SECRET=somepasswordpepper12345678901234
+      - GRAYLOG_ROOT_PASSWORD_SHA2=8c6976e5b5410415bde908bd4dee15dfb167a9c873fc4bb8a81f6f2ab448a918
+      - GRAYLOG_HTTP_EXTERNAL_URI=http://127.0.0.1:9000/
+      - GRAYLOG_MONGODB_URI=mongodb://mongodb:27017/graylog
+      - GRAYLOG_ELASTICSEARCH_HOSTS=http://opensearch:9200
+    ports:
+      - "9000:9000"       # Веб-интерфейс Graylog
+      - "12201:12201/udp" # Порт GELF (по нему бот шлет логи)
+    depends_on:
+      - mongodb
+      - opensearch
+
+  bot:
+    build: .
+    container_name: tbot_app
+    restart: always
+    depends_on:
+      - db
+      - graylog
+    env_file:
+      - .env
+
+volumes:
+  db_data:
+  mongo_data:
+  os_data:
