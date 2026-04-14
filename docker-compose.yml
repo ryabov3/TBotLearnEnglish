@@ -1,7 +1,6 @@
 version: "3.8"
 
 services:
-  # 1. Наша база данных MySQL
   db:
     image: mysql:8.0
     container_name: tbot_mysql
@@ -54,8 +53,8 @@ services:
       - GRAYLOG_MONGODB_URI=mongodb://mongodb:27017/graylog
       - GRAYLOG_ELASTICSEARCH_HOSTS=http://opensearch:9200
     ports:
-      - "9000:9000"       # Веб-интерфейс Graylog
-      - "12201:12201/udp" # Порт GELF (по нему бот шлет логи)
+      - "9000:9000"
+      - "12201:12201/udp"
     depends_on:
       - mongodb
       - opensearch
