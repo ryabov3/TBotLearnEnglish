@@ -5,7 +5,7 @@ FROM python:3.12-slim
 WORKDIR /app
 
 # Устанавливаем uv (современный супербыстрый пакетный менеджер)
-RUN pip install --no-cache-dir uv
+COPY --from=ghcr.io/astral-sh/uv:latest /uv /uvx /bin/
 
 # Копируем конфигурационные файлы проекта
 COPY pyproject.toml uv.lock ./
