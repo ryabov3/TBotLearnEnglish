@@ -375,7 +375,11 @@ async def start_specific_task(callback: types.CallbackQuery, state: FSMContext):
         if not task:
             return await callback.answer("Задание не найдено.")
 
-        await callback.message.delete()
+        # БЕЗОПАСНОЕ УДАЛЕНИЕ СООБЩЕНИЯ (Защита от двойного клика)
+        try:
+            await callback.message.delete()
+        except Exception:
+            pass
 
         await callback.message.answer(
             f"📂 Тема: <b>{task.topic}</b>\n\n"
@@ -523,7 +527,11 @@ async def send_answer_to_db(callback: types.CallbackQuery, state: FSMContext):
         )
         next_task = result.scalar_one_or_none()
 
-    await callback.message.delete()
+    # БЕЗОПАСНОЕ УДАЛЕНИЕ СООБЩЕНИЯ
+    try:
+        await callback.message.delete()
+    except Exception:
+        pass
     
     if next_task:
         builder = InlineKeyboardBuilder()

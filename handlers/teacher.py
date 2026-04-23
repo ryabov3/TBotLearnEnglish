@@ -42,7 +42,7 @@ async def teacher_menu_callback(callback: types.CallbackQuery, state: FSMContext
         builder.button(text="♻️ Продолжить создание темы", callback_data="t_resume_draft")
         
     builder.button(text="✅ Проверить ответы", callback_data="t_check_tasks_0")
-    builder.button(text="👀 Проверенные задания", callback_data="t_chkd_pg_0") # <-- НОВАЯ КНОПКА
+    builder.button(text="👀 Проверенные задания", callback_data="t_chkd_pg_0")
     builder.button(text="📋 Список классов", callback_data="t_lc_pg_0") 
     builder.button(text="📊 Статистика", callback_data="t_st_pg_0")
     builder.button(text="➕ Создать группу", callback_data="t_add_group")
@@ -143,6 +143,7 @@ async def process_group_name(message: types.Message, state: FSMContext):
     await message.answer("✅ Класс и группа успешно сохранены!", reply_markup=builder.as_markup())
     await state.set_state(None)
 
+
 # ================= 2. ДОБАВЛЕНИЕ УЧЕНИКА В ГРУППУ =================
 @teacher_router.callback_query(F.data == "t_add_student")
 async def start_add_student(callback: types.CallbackQuery, state: FSMContext):
@@ -188,6 +189,7 @@ async def add_student_username(message: types.Message, state: FSMContext):
             await session.commit()
             await message.answer(f"✅ Ученик @{username} успешно добавлен в {data['class_name']} - {data['group_name']}!", reply_markup=builder.as_markup())
     await state.set_state(None)
+
 
 # ================= 2.1 УДАЛЕНИЕ УЧЕНИКА =================
 @teacher_router.callback_query(F.data == "t_rem_student")
@@ -263,15 +265,13 @@ async def rem_student_confirm(callback: types.CallbackQuery):
     await show_rem_students_page(callback, group_id, 0)
 
 
-# ================= 3. СОЗДАНИЕ ЗАДАНИЙ (С ВАЛИДАЦИЕЙ) =================
-
+# ================= 3. СОЗДАНИЕ ЗАДАНИЙ =================
 @teacher_router.callback_query(F.data == "t_new_task")
 async def start_new_task(callback: types.CallbackQuery, state: FSMContext):
-    await state.update_data(tasks_list=[]) # Сброс черновика при старте нового
+    await state.update_data(tasks_list=[])
     await callback.message.edit_text("Введи название <b>общей темы</b> (например, 'Хобби'):", parse_mode="HTML", reply_markup=get_cancel_t())
     await state.set_state(TeacherTask.topic)
 
-# ПРОДОЛЖЕНИЕ ЧЕРНОВИКА
 @teacher_router.callback_query(F.data == "t_resume_draft")
 async def resume_task_draft(callback: types.CallbackQuery, state: FSMContext):
     data = await state.get_data()
@@ -293,8 +293,7 @@ async def back_to_topic(callback: types.CallbackQuery, state: FSMContext):
 async def task_topic(message: types.Message, state: FSMContext):
     if len(message.text) > 250:
         return await message.answer(
-            "❌ Название темы слишком длинное. Возможно, вы отправили описание задания в качестве названия.\n"
-            "Пожалуйста, отправьте более короткое название:",
+            "❌ Название темы слишком длинное. Пожалуйста, отправьте более короткое название:",
             reply_markup=get_cancel_or_back_t("t_back_to_topic")
         )
         
@@ -318,8 +317,7 @@ async def back_to_title(callback: types.CallbackQuery, state: FSMContext):
 async def task_title(message: types.Message, state: FSMContext):
     if len(message.text) > 250:
         return await message.answer(
-            "❌ Название задания слишком длинное. Возможно, вы отправили описание задания в качестве названия.\n"
-            "Пожалуйста, отправьте более короткое название:",
+            "❌ Название задания слишком длинное.\nПожалуйста, отправьте более короткое название:",
             reply_markup=get_cancel_or_back_t("t_back_to_title")
         )
         
@@ -341,7 +339,7 @@ async def task_desc(message: types.Message, state: FSMContext):
     builder.button(text="⬅️ Шаг назад", callback_data="t_back_to_desc")
     builder.button(text="❌ Отмена", callback_data="t_menu")
     builder.adjust(1)
-    await message.answer("Отправь файл с примером для этого задания (Фото, Видео, Голосовое и т.д.).\nЕсли медиа не нужно, нажми «Пропустить».", reply_markup=builder.as_markup())
+    await message.answer("Отправь файл с примером для этого задания.\nЕсли медиа не нужно, нажми «Пропустить».", reply_markup=builder.as_markup())
     await state.set_state(TeacherTask.media)
 
 @teacher_router.callback_query(TeacherTask.media, F.data == "skip_media")
@@ -383,7 +381,7 @@ async def ask_answer_type(message_or_callback: types.Message, state: FSMContext)
 
 @teacher_router.callback_query(TeacherTask.answer_type, F.data.startswith("ans_type_"))
 async def process_answer_type(callback: types.CallbackQuery, state: FSMContext):
-    ans_type = callback.data.split("_")[2] # "audio", "video", or "any"
+    ans_type = callback.data.split("_")[2]
     data = await state.get_data()
     tasks_list = data.get('tasks_list', [])
     
@@ -445,7 +443,12 @@ async def preview_topic(callback: types.CallbackQuery, state: FSMContext):
     tasks_list = data.get('tasks_list', [])
     topic = data.get('topic', 'Без темы')
 
-    await callback.message.delete()
+    # БЕЗОПАСНОЕ УДАЛЕНИЕ СООБЩЕНИЯ
+    try:
+        await callback.message.delete()
+    except Exception:
+        pass
+
     await callback.message.answer(f"👀 <b>ПРЕДПРОСМОТР ТЕМЫ «{topic}»</b>\n<i>(Именно в таком виде это будет приходить ученику по очереди)</i>", parse_mode="HTML")
 
     for i, t in enumerate(tasks_list, 1):
@@ -557,7 +560,8 @@ async def confirm_task(callback: types.CallbackQuery, state: FSMContext):
     builder.button(text="◀️ В меню", callback_data="t_menu")
     await callback.message.edit_text("✅ Тема со всеми заданиями успешно создана и разослана выбранным группам!", reply_markup=builder.as_markup())
 
-# ================= УДАЛЕНИЕ ЗАДАНИЯ (ТЕМЫ) =================
+
+# ================= УДАЛЕНИЕ ЗАДАНИЯ =================
 @teacher_router.callback_query(F.data == "t_del_task_start")
 async def del_task_start(callback: types.CallbackQuery, state: FSMContext):
     async with SessionLocal() as session:
@@ -661,7 +665,7 @@ async def del_task_execute(callback: types.CallbackQuery, state: FSMContext):
     )
 
 
-# ================= 4. ПРОВЕРКА ЗАДАНИЙ (ИЗМЕНЕНО) =================
+# ================= 4. ПРОВЕРКА ЗАДАНИЙ =================
 @teacher_router.callback_query(F.data.startswith("t_check_tasks_"))
 async def check_tasks_groups(callback: types.CallbackQuery):
     page = int(callback.data.split("_")[-1])
@@ -702,7 +706,6 @@ async def check_tasks_in_group(callback: types.CallbackQuery):
     async with SessionLocal() as session:
         group = await session.get(StudyGroup, group_id)
         
-        # Ищем только те задания, у которых ЕСТЬ непроверенные ответы
         result = await session.execute(
             select(Task)
             .join(Submission, Submission.task_id == Task.id)
@@ -763,7 +766,11 @@ async def check_tasks_students(callback: types.CallbackQuery):
         f"👇 <b>Выберите ученика для проверки:</b>"
     )
 
-    await callback.message.delete() 
+    # БЕЗОПАСНОЕ УДАЛЕНИЕ СООБЩЕНИЯ
+    try:
+        await callback.message.delete() 
+    except Exception:
+        pass
 
     if task.media_id:
         if task.media_type == "photo":
@@ -796,7 +803,11 @@ async def check_tasks_evaluate(callback: types.CallbackQuery, state: FSMContext)
         if not row: return await callback.answer("Ошибка, ответ не найден.")
         sub, student, task = row
 
-    await callback.message.delete() 
+    # БЕЗОПАСНОЕ УДАЛЕНИЕ СООБЩЕНИЯ
+    try:
+        await callback.message.delete() 
+    except Exception:
+        pass
 
     text = f"👤 <b>Ответ ученика:</b> {student.first_name} {student.last_name} (@{student.username or 'без_юзернейма'})"
     await callback.message.answer(text, parse_mode="HTML")
@@ -838,7 +849,7 @@ async def process_comment(message: types.Message, state: FSMContext):
     
     await message.answer("✅ Оценка и комментарий сохранены!", reply_markup=builder.as_markup())
 
-# ================= 4.1. ПРОВЕРЕННЫЕ ЗАДАНИЯ (НОВОЕ) =================
+# ================= 4.1. ПРОВЕРЕННЫЕ ЗАДАНИЯ =================
 @teacher_router.callback_query(F.data.startswith("t_chkd_pg_"))
 async def checked_tasks_groups(callback: types.CallbackQuery):
     page = int(callback.data.split("_")[-1])
