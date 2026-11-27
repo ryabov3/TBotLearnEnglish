@@ -17,7 +17,7 @@ RUN uv sync
 COPY . .
 
 # Делаем скрипт точки входа исполняемым (на случай, если слетели права в Windows)
-RUN chmod +x entrypoint.sh
+RUN sed -i 's/\r$//' /app/entrypoint.sh && chmod +x /app/entrypoint.sh
 
 # АКТИВАЦИЯ СРЕДЫ: Добавляем путь к виртуальному окружению в PATH
 ENV PATH="/app/.venv/bin:$PATH"

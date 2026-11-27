@@ -14,5 +14,6 @@ dependencies = [
     "environs>=14.6.0",
     "graypy>=2.1.0",
     "loguru>=0.7.3",
+    "redis>=5.0.0",
     "sqlalchemy>=2.0.48",
 ]

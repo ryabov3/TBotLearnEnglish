@@ -13,6 +13,21 @@ services:
     volumes:
       - db_data:/var/lib/mysql
 
+  redis:
+    image: redis:7-alpine
+    container_name: tbot_redis
+    restart: always
+    command: redis-server --appendonly yes --maxmemory 256mb --maxmemory-policy allkeys-lru
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
   adminer:
     image: adminer:latest
     container_name: tbot_adminer
@@ -65,11 +80,13 @@ services:
     restart: always
     depends_on:
       - db
+      - redis
       - graylog
     env_file:
       - .env
 
 volumes:
   db_data:
+  redis_data:
   mongo_data:
   os_data:
