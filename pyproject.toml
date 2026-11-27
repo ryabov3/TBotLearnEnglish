@@ -12,8 +12,10 @@ dependencies = [
     "asyncmy>=0.2.11",
     "cryptography>=46.0.5",
     "environs>=14.6.0",
+    "fastapi>=0.115.0",
     "graypy>=2.1.0",
     "loguru>=0.7.3",
     "redis>=5.0.0",
     "sqlalchemy>=2.0.48",
+    "uvicorn>=0.32.0",
 ]

@@ -36,8 +36,15 @@ proxy_host = env("PROXY_HOST", "")
 proxy_port = env("PROXY_PORT", "")
 
 BOT_TOKEN = env("BOT_TOKEN")
+BOT_USERNAME = env("BOT_USERNAME", "").lstrip("@").strip()
 ADMINS_ID = _parse_id_list("ADMINS_ID")
 FOUNDERS_ID = _parse_id_list("FOUNDERS_ID")
+
+# Настройки Telegram Mini App (Web App)
+WEBAPP_URL = env("WEBAPP_URL", "").strip()
+WEBAPP_PORT = env.int("WEBAPP_PORT", 8000)
+# Опционально для локальной отладки UI в обычном браузере (в продакшене оставить пустым)
+WEBAPP_DEV_USER_ID = env("WEBAPP_DEV_USER_ID", "").strip()
 
 DATABASE_URL = f"mysql+aiomysql://{db_user}:{db_password}@{db_host}:{db_port}/{db_name}?charset=utf8mb4"
 

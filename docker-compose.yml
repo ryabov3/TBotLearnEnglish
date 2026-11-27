@@ -74,6 +74,30 @@ services:
       - mongodb
       - opensearch
 
+  webapp:
+    build: .
+    container_name: tbot_webapp
+    restart: always
+    entrypoint: []
+    command: ["uvicorn", "webapp.main:app", "--host", "0.0.0.0", "--port", "8000"]
+    ports:
+      - "${WEBAPP_PORT:-8000}:8000"
+    depends_on:
+      - db
+      - redis
+    env_file:
+      - .env
+
+  frontend:
+    build:
+      context: ./frontend
+    container_name: tbot_frontend
+    restart: always
+    ports:
+      - "${FRONTEND_PORT:-3000}:80"
+    depends_on:
+      - webapp
+
   bot:
     build: .
     container_name: tbot_app
@@ -82,6 +106,8 @@ services:
       - db
       - redis
       - graylog
+      - webapp
+      - frontend
     env_file:
       - .env
 
