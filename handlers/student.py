@@ -1,107 +1,171 @@
 # handlers/student.py
-from aiogram import Router, types, F
-from aiogram.filters import CommandStart, Command
-from aiogram.fsm.context import FSMContext
-from aiogram.utils.keyboard import InlineKeyboardBuilder
-from sqlalchemy import select
 from datetime import date, timedelta
 
-from config.config import ADMINS_ID
+from aiogram import F, Router, types
+from aiogram.filters import CommandStart
+from aiogram.fsm.context import FSMContext
+from sqlalchemy import select
+
+from config.config import ADMINS_ID, FOUNDERS_ID
+from database.cache import (
+    get_group_tasks_cached,
+    get_task_cached,
+    get_user_cached,
+    invalidate_user_cache,
+)
 from database.engine import SessionLocal
-from database.models import User, Task, Submission
-from states.states import StudentTask, Registration, ChangeProfile
+from database.models import Submission, Task, User
+from keyboards.student import (
+    get_after_answer_kb,
+    get_answer_confirm_kb,
+    get_answer_retry_kb,
+    get_back_to_student_menu_kb,
+    get_cancel_student_kb,
+    get_choose_role_kb,
+    get_completed_tasks_kb,
+    get_exit_task_kb,
+    get_profile_kb,
+    get_reg_confirm_kb,
+    get_student_panel_kb,
+    get_submission_details_kb,
+    get_topics_kb,
+)
+from keyboards.teacher import get_teacher_panel_kb
+from lexicon import LEXICON
+from states.states import ChangeProfile, Registration, StudentTask
 
 student_router = Router()
 
-def get_cancel_s():
-    builder = InlineKeyboardBuilder()
-    builder.button(text="❌ Отмена", callback_data="s_panel")
-    return builder.as_markup()
+
+def get_role_label(role: str) -> str:
+    labels = {
+        "student": LEXICON["role_student_name"],
+        "teacher": LEXICON["role_teacher_name"],
+        "admin": LEXICON["role_admin_name"],
+        "founder": LEXICON["role_founder_name"],
+    }
+    return labels.get(role, role)
+
 
 async def send_role_panel(message: types.Message, role: str, is_edit: bool = False):
-    builder = InlineKeyboardBuilder()
-    if role in ["teacher", "admin"]:
-        builder.button(text="📝 Создать задание", callback_data="t_new_task")
-        builder.button(text="🗑 Удалить задание", callback_data="t_del_task_start")
-        builder.button(text="✅ Проверить ответы", callback_data="t_check_tasks_0")
-        builder.button(text="👀 Проверенные задания", callback_data="t_chkd_pg_0") 
-        builder.button(text="📋 Список классов", callback_data="t_lc_pg_0") 
-        builder.button(text="📊 Статистика", callback_data="t_st_pg_0")
-        builder.button(text="➕ Создать группу", callback_data="t_add_group")
-        builder.button(text="👤 Добавить ученика", callback_data="t_add_student")
-        builder.button(text="➖ Удалить ученика", callback_data="t_rem_student")
-        builder.adjust(1)
-        text = "👨‍🏫 <b>Панель Учителя</b>\nВыберите действие:"
+    if role in ("teacher", "admin", "founder"):
+        markup = get_teacher_panel_kb(
+            has_draft=False, show_admin_btn=(role in ("admin", "founder"))
+        )
+        text = LEXICON["panel_teacher_title"]
     else:
-        builder.button(text="📝 Новые темы", callback_data="s_tasks_new")
-        builder.button(text="⏳ Темы в процессе", callback_data="s_tasks_progress")
-        builder.button(text="✅ Выполненные задания", callback_data="s_completed")
-        builder.button(text="👤 Мой профиль", callback_data="s_profile")
-        builder.adjust(1)
-        text = "🎓 <b>Панель Ученика</b>\nЧто хочешь сделать?"
+        markup = get_student_panel_kb()
+        text = LEXICON["panel_student_title"]
 
     if is_edit:
-        await message.edit_text(
-            text, parse_mode="HTML", reply_markup=builder.as_markup()
-        )
+        await message.edit_text(text, parse_mode="HTML", reply_markup=markup)
     else:
-        await message.answer(text, parse_mode="HTML", reply_markup=builder.as_markup())
+        await message.answer(text, parse_mode="HTML", reply_markup=markup)
 
 
 # ================= РЕГИСТРАЦИЯ И СТАРТ =================
 @student_router.message(CommandStart())
 async def cmd_start(message: types.Message, state: FSMContext):
-    await state.set_state(None) 
+    await state.set_state(None)
+    tg_id = message.from_user.id
+    username = message.from_user.username or LEXICON["no_username"]
+
+    changed = False
     async with SessionLocal() as session:
-        user = await session.get(User, message.from_user.id)
-        username = message.from_user.username or "Без_юзернейма"
+        user = await session.get(User, tg_id)
+        if user:
+            if user.is_banned:
+                return await message.answer(LEXICON["user_banned"])
 
-        if not user:
-            role = "admin" if message.from_user.id in ADMINS_ID else "student"
-            user = User(id=message.from_user.id, username=username, role=role)
-            session.add(user)
-            await session.commit()
+            if tg_id in FOUNDERS_ID and user.role != "founder":
+                user.role = "founder"
+                changed = True
+            elif tg_id in ADMINS_ID and user.role not in ("admin", "founder"):
+                user.role = "admin"
+                changed = True
 
-        if user.is_banned:
-            return await message.answer("❌ Вы заблокированы администратором.")
+            if user.username != username:
+                user.username = username
+                changed = True
 
-        user.username = username
-        await session.commit()
+            if changed:
+                await session.commit()
 
-        if not user.first_name or not user.last_name:
-            await message.answer(
-                "👋 Привет! Для начала работы нам нужно познакомиться.\n\nВведите ваше <b>Имя</b>:",
-                parse_mode="HTML",
-            )
+            user_role = user.role
+            user_class = user.class_name
+            user_group = user.group_name
+            has_name = bool(user.first_name and user.last_name)
+        else:
+            user_role = None
+            user_class = None
+            user_group = None
+            has_name = False
+
+    if changed:
+        await invalidate_user_cache(
+            tg_id,
+            user_class,
+            user_group,
+            invalidate_teachers=(user_role in ("teacher", "admin", "founder")),
+        )
+
+    # Пользователь ещё не зарегистрирован (или не завершил ввод имени/фамилии)
+    if not has_name:
+        if tg_id in FOUNDERS_ID:
+            await state.update_data(reg_role="founder")
+            await message.answer(LEXICON["reg_welcome_admin"], parse_mode="HTML")
             await state.set_state(Registration.first_name)
-            return
+        elif tg_id in ADMINS_ID:
+            await state.update_data(reg_role="admin")
+            await message.answer(LEXICON["reg_welcome_admin"], parse_mode="HTML")
+            await state.set_state(Registration.first_name)
+        else:
+            await message.answer(
+                LEXICON["reg_welcome_choose_role"],
+                parse_mode="HTML",
+                reply_markup=get_choose_role_kb(),
+            )
+            await state.set_state(Registration.role)
+        return
 
-        await send_role_panel(message, user.role, is_edit=False)
+    await send_role_panel(message, user_role, is_edit=False)
+
+
+@student_router.callback_query(
+    Registration.role, F.data.in_(["reg_role_student", "reg_role_teacher"])
+)
+async def reg_choose_role(callback: types.CallbackQuery, state: FSMContext):
+    role = "teacher" if callback.data == "reg_role_teacher" else "student"
+    await state.update_data(reg_role=role)
+    await callback.message.edit_text(
+        LEXICON["reg_role_selected"].format(role_label=get_role_label(role)),
+        parse_mode="HTML",
+    )
+    await state.set_state(Registration.first_name)
+    await callback.answer()
 
 
 @student_router.message(Registration.first_name, F.text)
 async def reg_first_name(message: types.Message, state: FSMContext):
-    await state.update_data(first_name=message.text)
-    await message.answer(
-        "Отлично! Теперь введите вашу <b>Фамилию</b>:", parse_mode="HTML"
-    )
+    await state.update_data(first_name=message.text.strip())
+    await message.answer(LEXICON["reg_enter_last_name"], parse_mode="HTML")
     await state.set_state(Registration.last_name)
 
 
 @student_router.message(Registration.last_name, F.text)
 async def reg_last_name(message: types.Message, state: FSMContext):
-    await state.update_data(last_name=message.text)
+    await state.update_data(last_name=message.text.strip())
     data = await state.get_data()
-
-    builder = InlineKeyboardBuilder()
-    builder.button(text="✅ Всё верно", callback_data="reg_confirm")
-    builder.button(text="🔄 Изменить", callback_data="reg_edit")
-    builder.adjust(1)
+    role = data.get("reg_role", "founder" if message.from_user.id in FOUNDERS_ID else ("admin" if message.from_user.id in ADMINS_ID else "student"))
 
     await message.answer(
-        f"Ваши данные:\nИмя: <b>{data['first_name']}</b>\nФамилия: <b>{data['last_name']}</b>\n\nВсё верно?",
+        LEXICON["reg_confirm_data"].format(
+            role_label=get_role_label(role),
+            first_name=data["first_name"],
+            last_name=data["last_name"],
+        ),
         parse_mode="HTML",
-        reply_markup=builder.as_markup(),
+        reply_markup=get_reg_confirm_kb(),
     )
     await state.set_state(Registration.confirm)
 
@@ -109,55 +173,64 @@ async def reg_last_name(message: types.Message, state: FSMContext):
 @student_router.callback_query(Registration.confirm, F.data == "reg_confirm")
 async def reg_confirm_yes(callback: types.CallbackQuery, state: FSMContext):
     data = await state.get_data()
+    tg_id = callback.from_user.id
+    username = callback.from_user.username or LEXICON["no_username"]
+    chosen_role = data.get("reg_role", "founder" if tg_id in FOUNDERS_ID else ("admin" if tg_id in ADMINS_ID else "student"))
+
     async with SessionLocal() as session:
-        user = await session.get(User, callback.from_user.id)
-        user.first_name = data["first_name"]
-        user.last_name = data["last_name"]
+        user = await session.get(User, tg_id)
+        if not user:
+            user = User(
+                id=tg_id,
+                username=username,
+                first_name=data["first_name"],
+                last_name=data["last_name"],
+                role=chosen_role,
+            )
+            session.add(user)
+        else:
+            user.username = username
+            user.first_name = data["first_name"]
+            user.last_name = data["last_name"]
+            user.role = chosen_role
         await session.commit()
         role = user.role
+        c_name, g_name = user.class_name, user.group_name
 
+    await invalidate_user_cache(
+        tg_id,
+        c_name,
+        g_name,
+        invalidate_teachers=(role in ("teacher", "admin", "founder")),
+    )
     await state.set_state(None)
-    await callback.message.edit_text("✅ Отлично! Данные сохранены.")
+    await callback.message.edit_text(LEXICON["reg_saved"])
     await send_role_panel(callback.message, role, is_edit=False)
 
 
 @student_router.callback_query(Registration.confirm, F.data == "reg_edit")
 async def reg_confirm_no(callback: types.CallbackQuery, state: FSMContext):
-    await callback.message.edit_text(
-        "Давай попробуем снова. Введите ваше <b>Имя</b>:", parse_mode="HTML"
-    )
-    await state.set_state(Registration.first_name)
+    if callback.from_user.id in FOUNDERS_ID or callback.from_user.id in ADMINS_ID:
+        await callback.message.edit_text(
+            LEXICON["reg_retry_first_name"], parse_mode="HTML"
+        )
+        await state.set_state(Registration.first_name)
+    else:
+        await callback.message.edit_text(
+            LEXICON["reg_retry_choose_role"],
+            parse_mode="HTML",
+            reply_markup=get_choose_role_kb(),
+        )
+        await state.set_state(Registration.role)
 
 
 # ================= МЕНЮ И ПРОФИЛЬ =================
-@student_router.message(Command("menu"))
-async def cmd_menu(message: types.Message, state: FSMContext):
-    await state.set_state(None) 
-    async with SessionLocal() as session:
-        user = await session.get(User, message.from_user.id)
-        if user and not user.is_banned:
-            if not user.first_name or not user.last_name:
-                await message.answer(
-                    "Пожалуйста, сначала введите свое <b>Имя</b>:", parse_mode="HTML"
-                )
-                await state.set_state(Registration.first_name)
-                return
-            await send_role_panel(message, user.role, is_edit=False)
-
-
 @student_router.callback_query(F.data == "s_panel")
 async def back_to_student_panel(callback: types.CallbackQuery, state: FSMContext):
     await state.set_state(None)
-    async with SessionLocal() as session:
-        user = await session.get(User, callback.from_user.id)
-        if user and not user.is_banned:
-            await send_role_panel(callback.message, user.role, is_edit=True)
-
-
-@student_router.message(Command("profile"))
-async def cmd_profile(message: types.Message, state: FSMContext):
-    await state.set_state(None)
-    await show_profile(message)
+    user = await get_user_cached(callback.from_user.id)
+    if user and not user.is_banned:
+        await send_role_panel(callback.message, user.role, is_edit=True)
 
 
 @student_router.callback_query(F.data == "s_profile")
@@ -166,58 +239,51 @@ async def inline_profile(callback: types.CallbackQuery):
 
 
 async def show_profile(
-    message: types.Message, is_callback=False, original_callback=None
+    message: types.Message, is_callback: bool = False, original_callback=None
 ):
-    async with SessionLocal() as session:
-        user = await session.get(
-            User, message.chat.id if is_callback else message.from_user.id
+    user_id = message.chat.id if is_callback else message.from_user.id
+    user = await get_user_cached(user_id)
+    if not user or user.is_banned:
+        return
+
+    text = LEXICON["student_profile"].format(
+        first_name=user.first_name,
+        last_name=user.last_name,
+        username=user.username,
+        role_label=get_role_label(user.role),
+        class_name=user.class_name or LEXICON["no_class"],
+        group_name=user.group_name or LEXICON["no_group"],
+        current_streak=user.current_streak,
+        total_completed=user.total_completed,
+        max_tasks_per_day=user.max_tasks_per_day,
+    )
+
+    markup = get_profile_kb()
+    if is_callback:
+        await original_callback.message.edit_text(
+            text, parse_mode="HTML", reply_markup=markup
         )
-        if not user or user.is_banned:
-            return
-
-        g = user.group_name if user.group_name else "Нет группы"
-        c = user.class_name if user.class_name else "Нет класса"
-
-        text = (
-            f"👤 <b>Профиль:</b> {user.first_name} {user.last_name} (@{user.username})\n"
-            f"🎓 <b>Роль:</b> {user.role}\n"
-            f"🏫 <b>Класс/Группа:</b> {c} / {g}\n\n"
-            f"📊 <b>Твоя статистика:</b>\n"
-            f"🔥 <b>Дней подряд:</b> {user.current_streak}\n"
-            f"✅ <b>Всего заданий:</b> {user.total_completed}\n"
-            f"🏆 <b>Максимум в день:</b> {user.max_tasks_per_day}\n"
-        )
-
-        builder = InlineKeyboardBuilder()
-        builder.button(text="✏️ Изменить имя", callback_data="s_edit_name")
-        builder.button(text="◀️ Назад", callback_data="s_panel")
-        builder.adjust(1)
-
-        if is_callback:
-            await original_callback.message.edit_text(
-                text, parse_mode="HTML", reply_markup=builder.as_markup()
-            )
-        else:
-            await message.answer(
-                text, parse_mode="HTML", reply_markup=builder.as_markup()
-            )
+    else:
+        await message.answer(text, parse_mode="HTML", reply_markup=markup)
 
 
 @student_router.callback_query(F.data == "s_edit_name")
 async def edit_name_start(callback: types.CallbackQuery, state: FSMContext):
     await callback.message.edit_text(
-        "Введите свое новое <b>Имя</b>:", parse_mode="HTML", reply_markup=get_cancel_s()
+        LEXICON["edit_first_name_prompt"],
+        parse_mode="HTML",
+        reply_markup=get_cancel_student_kb(),
     )
     await state.set_state(ChangeProfile.first_name)
 
 
 @student_router.message(ChangeProfile.first_name, F.text)
 async def edit_first_name(message: types.Message, state: FSMContext):
-    await state.update_data(first_name=message.text)
+    await state.update_data(first_name=message.text.strip())
     await message.answer(
-        "Теперь введите новую <b>Фамилию</b>:",
+        LEXICON["edit_last_name_prompt"],
         parse_mode="HTML",
-        reply_markup=get_cancel_s(),
+        reply_markup=get_cancel_student_kb(),
     )
     await state.set_state(ChangeProfile.last_name)
 
@@ -228,11 +294,20 @@ async def edit_last_name(message: types.Message, state: FSMContext):
     async with SessionLocal() as session:
         user = await session.get(User, message.from_user.id)
         user.first_name = data["first_name"]
-        user.last_name = message.text
+        user.last_name = message.text.strip()
         await session.commit()
+        role = user.role
+        c_name, g_name = user.class_name, user.group_name
+
+    await invalidate_user_cache(
+        message.from_user.id,
+        c_name,
+        g_name,
+        invalidate_teachers=(role in ("teacher", "admin", "founder")),
+    )
     await state.set_state(None)
-    await message.answer("✅ Имя и фамилия успешно изменены!")
-    await send_role_panel(message, user.role, is_edit=False)
+    await message.answer(LEXICON["edit_name_success"])
+    await send_role_panel(message, role, is_edit=False)
 
 
 # ================= ВЫПОЛНЕННЫЕ ЗАДАНИЯ =================
@@ -248,27 +323,17 @@ async def show_completed_tasks(callback: types.CallbackQuery):
         )
         rows = result.all()
 
-        builder = InlineKeyboardBuilder()
-        if not rows:
-            builder.button(text="◀️ В меню", callback_data="s_panel")
-            return await callback.message.edit_text(
-                "У тебя пока нет выполненных заданий.", reply_markup=builder.as_markup()
-            )
-
-        for sub, task in rows:
-            grade_str = f"Оценка: {sub.grade}" if sub.grade else "⏳ На проверке"
-            builder.button(
-                text=f"📝 {task.topic} | {task.title} ({grade_str})", callback_data=f"s_sub_{sub.id}"
-            )
-
-        builder.button(text="◀️ В меню", callback_data="s_panel")
-        builder.adjust(1)
-
-        await callback.message.edit_text(
-            "✅ <b>Последние выполненные задания:</b>",
-            parse_mode="HTML",
-            reply_markup=builder.as_markup(),
+    if not rows:
+        return await callback.message.edit_text(
+            LEXICON["student_no_completed"],
+            reply_markup=get_back_to_student_menu_kb(),
         )
+
+    await callback.message.edit_text(
+        LEXICON["student_completed_title"],
+        parse_mode="HTML",
+        reply_markup=get_completed_tasks_kb(rows),
+    )
 
 
 @student_router.callback_query(F.data.startswith("s_sub_"))
@@ -282,189 +347,188 @@ async def show_submission_details(callback: types.CallbackQuery):
         )
         sub, task = result.first()
 
-        grade_str = str(sub.grade) if sub.grade else "⏳ Ещё не проверено"
-        comment_str = sub.teacher_comment if sub.teacher_comment else "Нет комментария"
+    grade_str = str(sub.grade) if sub.grade else LEXICON["student_grade_not_checked"]
+    comment_str = sub.teacher_comment or LEXICON["no_comment"]
 
-        text = (
-            f"Тема: <b>{task.topic}</b>\n"
-            f"📝 <b>Задание:</b> {task.title}\n"
-            f"📖 <b>Описание:</b> {task.description}\n\n"
-            f"⭐️ <b>Твоя оценка:</b> {grade_str}\n"
-            f"👨‍🏫 <b>Комментарий учителя:</b> {comment_str}"
-        )
-        builder = InlineKeyboardBuilder()
-        builder.button(text="◀️ К списку", callback_data="s_completed")
-        builder.adjust(1)
-        await callback.message.edit_text(
-            text, parse_mode="HTML", reply_markup=builder.as_markup()
-        )
+    text = LEXICON["student_submission_details"].format(
+        topic=task.topic,
+        title=task.title,
+        description=task.description,
+        grade=grade_str,
+        comment=comment_str,
+    )
+    await callback.message.edit_text(
+        text, parse_mode="HTML", reply_markup=get_submission_details_kb()
+    )
 
 
 # ================= ОТОБРАЖЕНИЕ ТЕМ =================
 @student_router.callback_query(F.data.in_(["s_tasks_new", "s_tasks_progress"]))
 async def show_topics(callback: types.CallbackQuery, state: FSMContext):
-    is_progress_tab = (callback.data == "s_tasks_progress")
-    
-    async with SessionLocal() as session:
-        user = await session.get(User, callback.from_user.id)
-        builder = InlineKeyboardBuilder()
-        builder.button(text="◀️ В меню", callback_data="s_panel")
+    is_progress_tab = callback.data == "s_tasks_progress"
 
-        if not user or not user.class_name:
-            return await callback.message.edit_text(
-                "Учитель еще не добавил тебя в группу!",
-                reply_markup=builder.as_markup(),
-            )
-
-        tasks_result = await session.execute(
-            select(Task).where(
-                Task.class_name == user.class_name,
-                Task.group_name == user.group_name,
-            ).order_by(Task.id)
+    user = await get_user_cached(callback.from_user.id)
+    if not user or not user.class_name:
+        return await callback.message.edit_text(
+            LEXICON["student_no_group"],
+            reply_markup=get_back_to_student_menu_kb(),
         )
-        all_tasks = tasks_result.scalars().all()
 
+    all_tasks = await get_group_tasks_cached(user.class_name, user.group_name)
+
+    async with SessionLocal() as session:
         subs_result = await session.execute(
             select(Submission.task_id).where(Submission.student_id == user.id)
         )
-        completed_task_ids = [r[0] for r in subs_result.all()]
+        completed_task_ids = {r[0] for r in subs_result.all()}
 
-        topics = {}
-        for t in all_tasks:
-            if t.topic not in topics:
-                topics[t.topic] = {'total': 0, 'completed': 0, 'first_uncompleted_id': None}
-            
-            topics[t.topic]['total'] += 1
-            if t.id in completed_task_ids:
-                topics[t.topic]['completed'] += 1
-            elif topics[t.topic]['first_uncompleted_id'] is None:
-                topics[t.topic]['first_uncompleted_id'] = t.id
+    topics = {}
+    for t in all_tasks:
+        if t.topic not in topics:
+            topics[t.topic] = {"total": 0, "completed": 0, "first_uncompleted_id": None}
 
-        displayed_topics = 0
-        topic_builder = InlineKeyboardBuilder()
+        topics[t.topic]["total"] += 1
+        if t.id in completed_task_ids:
+            topics[t.topic]["completed"] += 1
+        elif topics[t.topic]["first_uncompleted_id"] is None:
+            topics[t.topic]["first_uncompleted_id"] = t.id
 
-        for topic_name, data in topics.items():
-            is_new = (data['completed'] == 0)
-            in_progress = (0 < data['completed'] < data['total'])
+    topic_buttons: list[tuple[str, str]] = []
+    for topic_name, data in topics.items():
+        is_new = data["completed"] == 0
+        in_progress = 0 < data["completed"] < data["total"]
 
-            if (is_progress_tab and in_progress) or (not is_progress_tab and is_new):
-                displayed_topics += 1
-                progress_text = f"({data['completed']}/{data['total']})"
-                btn_data = f"s_do_t_{data['first_uncompleted_id']}"
-                topic_builder.button(text=f"📂 {topic_name} {progress_text}", callback_data=btn_data)
+        if (is_progress_tab and in_progress) or (not is_progress_tab and is_new):
+            progress_text = f"({data['completed']}/{data['total']})"
+            btn_data = f"s_do_t_{data['first_uncompleted_id']}"
+            topic_buttons.append((f"📂 {topic_name} {progress_text}", btn_data))
 
-        topic_builder.adjust(1)
-        topic_builder.attach(builder) 
+    title_text = (
+        LEXICON["student_topics_progress_title"]
+        if is_progress_tab
+        else LEXICON["student_topics_new_title"]
+    )
+    empty_text = (
+        LEXICON["student_topics_progress_empty"]
+        if is_progress_tab
+        else LEXICON["student_topics_new_empty"]
+    )
 
-        title_text = "⏳ <b>Темы в процессе:</b>" if is_progress_tab else "🆕 <b>Новые темы:</b>"
-        empty_text = "У тебя нет тем в процессе выполнения." if is_progress_tab else "🎉 Ура! У тебя нет новых тем на сегодня."
-
-        if displayed_topics == 0:
-            await callback.message.edit_text(empty_text, reply_markup=builder.as_markup())
-        else:
-            await callback.message.edit_text(title_text, parse_mode="HTML", reply_markup=topic_builder.as_markup())
+    if not topic_buttons:
+        await callback.message.edit_text(
+            empty_text, reply_markup=get_back_to_student_menu_kb()
+        )
+    else:
+        await callback.message.edit_text(
+            title_text,
+            parse_mode="HTML",
+            reply_markup=get_topics_kb(topic_buttons),
+        )
 
 
 # ================= ВЫПОЛНЕНИЕ ЗАДАНИЯ =================
 @student_router.callback_query(F.data.startswith("s_do_t_"))
 async def start_specific_task(callback: types.CallbackQuery, state: FSMContext):
     task_id = int(callback.data.split("_")[3])
-    
-    async with SessionLocal() as session:
-        task = await session.get(Task, task_id)
-        if not task:
-            return await callback.answer("Задание не найдено.")
 
-        # БЕЗОПАСНОЕ УДАЛЕНИЕ СООБЩЕНИЯ (Защита от двойного клика)
-        try:
-            await callback.message.delete()
-        except Exception:
-            pass
+    task = await get_task_cached(task_id)
+    if not task:
+        return await callback.answer(LEXICON["task_not_found"])
 
-        await callback.message.answer(
-            f"📂 Тема: <b>{task.topic}</b>\n\n"
-            f"📝 <b>Задание:</b> {task.title}\n\n"
-            f"{task.description}", parse_mode="HTML"
-        )
+    try:
+        await callback.message.delete()
+    except Exception:
+        pass
 
-        if task.media_id:
-            await callback.message.answer("👇 Вложение от учителя:")
-            if task.media_type == "photo":
-                await callback.message.answer_photo(task.media_id)
-            elif task.media_type == "voice":
-                await callback.message.answer_voice(task.media_id)
-            elif task.media_type == "video_note":
-                await callback.message.answer_video_note(task.media_id)
-            elif task.media_type == "video":
-                await callback.message.answer_video(task.media_id)
-            elif task.media_type == "audio":
-                await callback.message.answer_audio(task.media_id)
-            elif task.media_type == "document":
-                await callback.message.answer_document(task.media_id)
+    await callback.message.answer(
+        LEXICON["student_task_card"].format(
+            topic=task.topic, title=task.title, description=task.description
+        ),
+        parse_mode="HTML",
+    )
 
-        cancel_builder = InlineKeyboardBuilder()
-        cancel_builder.button(text="❌ Выйти в меню (Прогресс сохранен)", callback_data="s_panel")
-        
-        req_text = "🤷‍♂️ Любой формат (Аудио или Видео)"
-        if task.expected_answer == "audio": req_text = "🎤 Только Аудио/Голосовое"
-        elif task.expected_answer == "video": req_text = "📹 Только Видео/Кружок"
+    if task.media_id:
+        await callback.message.answer(LEXICON["teacher_attachment"])
+        if task.media_type == "photo":
+            await callback.message.answer_photo(task.media_id)
+        elif task.media_type == "voice":
+            await callback.message.answer_voice(task.media_id)
+        elif task.media_type == "video_note":
+            await callback.message.answer_video_note(task.media_id)
+        elif task.media_type == "video":
+            await callback.message.answer_video(task.media_id)
+        elif task.media_type == "audio":
+            await callback.message.answer_audio(task.media_id)
+        elif task.media_type == "document":
+            await callback.message.answer_document(task.media_id)
 
-        await callback.message.answer(
-            f"⚠️ <b>Формат ответа:</b> {req_text}\n\n"
-            f"Запиши и отправь свой ответ 🎤\n"
-            f"<i>(Ты сможешь прослушать/посмотреть его перед отправкой учителю)</i>",
-            parse_mode="HTML",
-            reply_markup=cancel_builder.as_markup(),
-        )
-        
-        await state.update_data(current_task_id=task.id, current_topic=task.topic)
-        await state.set_state(StudentTask.waiting_for_answer)
+    req_text = LEXICON["req_format_any"]
+    if task.expected_answer == "audio":
+        req_text = LEXICON["req_format_audio"]
+    elif task.expected_answer == "video":
+        req_text = LEXICON["req_format_video"]
 
-# Если ученик отправляет текст, картинку и т.д. (ошибка формата)
-@student_router.message(StudentTask.waiting_for_answer, ~(F.voice | F.video_note | F.video | F.audio))
+    await callback.message.answer(
+        LEXICON["student_task_instructions"].format(req_text=req_text),
+        parse_mode="HTML",
+        reply_markup=get_exit_task_kb(),
+    )
+
+    await state.update_data(current_task_id=task.id, current_topic=task.topic)
+    await state.set_state(StudentTask.waiting_for_answer)
+
+
+@student_router.message(
+    StudentTask.waiting_for_answer, ~(F.voice | F.video_note | F.video | F.audio)
+)
 async def receive_answer_invalid(message: types.Message):
-    await message.answer("❌ Ответ на задание должен быть записан как медиа-файл (голосовое, аудио, видео-кружок или видео). Попробуйте еще раз!")
+    await message.answer(LEXICON["student_answer_invalid_media"])
 
-@student_router.message(StudentTask.waiting_for_answer, F.voice | F.video_note | F.video | F.audio)
+
+@student_router.message(
+    StudentTask.waiting_for_answer, F.voice | F.video_note | F.video | F.audio
+)
 async def receive_answer(message: types.Message, state: FSMContext):
     data = await state.get_data()
     task_id = data.get("current_task_id")
-    if not task_id: return
-    
-    # 1. Валидация формата ответа под требования учителя
-    async with SessionLocal() as session:
-        task = await session.get(Task, task_id)
-        
-    media_type = "voice" if (message.voice or message.audio) else ("video_note" if message.video_note else "video")
-    media_id = (
-        message.voice.file_id if message.voice 
-        else (message.audio.file_id if message.audio 
-              else (message.video_note.file_id if message.video_note else message.video.file_id))
+    if not task_id:
+        return
+
+    task = await get_task_cached(task_id)
+    if not task:
+        return await message.answer(LEXICON["task_not_found_or_deleted"])
+
+    media_type = (
+        "voice"
+        if (message.voice or message.audio)
+        else ("video_note" if message.video_note else "video")
     )
-    
+    media_id = (
+        message.voice.file_id
+        if message.voice
+        else (
+            message.audio.file_id
+            if message.audio
+            else (
+                message.video_note.file_id
+                if message.video_note
+                else message.video.file_id
+            )
+        )
+    )
+
     if task.expected_answer == "audio" and media_type not in ["voice", "audio"]:
         return await message.answer(
-            "❌ <b>Ошибка формата!</b>\nОтвет на это задание может быть <b>только аудио</b> (учитель выбрал: Аудио/Голосовое).\n\nЗапишите голосовое сообщение.", 
-            parse_mode="HTML"
+            LEXICON["student_answer_only_audio"], parse_mode="HTML"
         )
     elif task.expected_answer == "video" and media_type not in ["video_note", "video"]:
         return await message.answer(
-            "❌ <b>Ошибка формата!</b>\nОтвет на это задание может быть <b>только видео</b> (учитель выбрал: Видео/Кружок).\n\nЗапишите видео-сообщение.", 
-            parse_mode="HTML"
+            LEXICON["student_answer_only_video"], parse_mode="HTML"
         )
 
-    # 2. Сохраняем во временную память
     await state.update_data(temp_media_id=media_id, temp_media_type=media_type)
-
-    builder = InlineKeyboardBuilder()
-    builder.button(text="✅ Отправить учителю", callback_data="ans_send")
-    builder.button(text="🔄 Записать заново", callback_data="ans_retry")
-    builder.button(text="❌ Выйти в меню", callback_data="s_panel")
-    builder.adjust(1)
-
     await message.answer(
-        "Я получил твой ответ! Хочешь отправить его учителю или записать заново?",
-        reply_markup=builder.as_markup()
+        LEXICON["student_answer_confirm"], reply_markup=get_answer_confirm_kb()
     )
     await state.set_state(StudentTask.confirm_answer)
 
@@ -472,13 +536,8 @@ async def receive_answer(message: types.Message, state: FSMContext):
 @student_router.callback_query(StudentTask.confirm_answer, F.data == "ans_retry")
 async def retry_answer(callback: types.CallbackQuery, state: FSMContext):
     await state.update_data(temp_media_id=None, temp_media_type=None)
-    
-    cancel_builder = InlineKeyboardBuilder()
-    cancel_builder.button(text="❌ Выйти в меню", callback_data="s_panel")
-    
     await callback.message.edit_text(
-        "Хорошо, жду новый вариант. Запиши и отправь правильный формат 🎤",
-        reply_markup=cancel_builder.as_markup()
+        LEXICON["student_answer_retry"], reply_markup=get_answer_retry_kb()
     )
     await state.set_state(StudentTask.waiting_for_answer)
 
@@ -488,7 +547,7 @@ async def send_answer_to_db(callback: types.CallbackQuery, state: FSMContext):
     data = await state.get_data()
     task_id = data["current_task_id"]
     topic = data["current_topic"]
-    
+
     async with SessionLocal() as session:
         user = await session.get(User, callback.from_user.id)
         today = date.today()
@@ -516,39 +575,39 @@ async def send_answer_to_db(callback: types.CallbackQuery, state: FSMContext):
         session.add(new_sub)
         await session.commit()
 
+        user_class, user_group = user.class_name, user.group_name
+
         subq = select(Submission.task_id).where(Submission.student_id == user.id)
         result = await session.execute(
-            select(Task).where(
+            select(Task)
+            .where(
                 Task.class_name == user.class_name,
                 Task.group_name == user.group_name,
                 Task.topic == topic,
-                Task.id.not_in(subq)
-            ).order_by(Task.id).limit(1)
+                Task.id.not_in(subq),
+            )
+            .order_by(Task.id)
+            .limit(1)
         )
         next_task = result.scalar_one_or_none()
 
-    # БЕЗОПАСНОЕ УДАЛЕНИЕ СООБЩЕНИЯ
+    await invalidate_user_cache(callback.from_user.id, user_class, user_group)
+
     try:
         await callback.message.delete()
     except Exception:
         pass
-    
+
     if next_task:
-        builder = InlineKeyboardBuilder()
-        builder.button(text="Продолжить тему ➡️", callback_data=f"s_do_t_{next_task.id}") 
-        builder.button(text="❌ Сделать паузу (в меню)", callback_data="s_panel")
-        builder.adjust(1)
         await callback.message.answer(
-            "✅ Ответ отправлен! В этой теме есть еще задания. Продолжим?",
-            reply_markup=builder.as_markup(),
+            LEXICON["student_answer_sent_more"],
+            reply_markup=get_after_answer_kb(next_task.id),
         )
     else:
-        builder = InlineKeyboardBuilder()
-        builder.button(text="🏠 Вернуться в меню", callback_data="s_panel")
         await callback.message.answer(
-            f"🎉 <b>Поздравляю!</b> Ты полностью завершил тему <b>«{topic}»</b>! Ответы отправлены учителю.",
+            LEXICON["student_topic_finished"].format(topic=topic),
             parse_mode="HTML",
-            reply_markup=builder.as_markup(),
+            reply_markup=get_after_answer_kb(None),
         )
-    
+
     await state.set_state(None)
