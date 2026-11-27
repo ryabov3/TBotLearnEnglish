@@ -8,14 +8,12 @@ from aiogram import Bot, Dispatcher
 from aiogram.client.session.aiohttp import AiohttpSession
 from aiogram.fsm.storage.memory import MemoryStorage
 from aiogram.fsm.storage.redis import RedisStorage
-from aiogram.types import BotCommand
+from aiogram.types import BotCommand, MenuButtonWebApp, WebAppInfo
 from loguru import logger
 
 import config.config as config
 from database.cache import close_redis, redis_fsm
-from handlers.admin import admin_router
 from handlers.student import student_router
-from handlers.teacher import teacher_router
 from lexicon import LEXICON
 from middlewares import LoggingMiddleware, RegistrationCheckMiddleware
 
@@ -43,7 +41,6 @@ logger.add(
     format="{time:YYYY-MM-DD HH:mm:ss} | {level} | {message}",
 )
 
-# Интеграция Loguru с Graylog
 if config.graylog_host:
     try:
         gelf_logger = logging.getLogger("gelf_logger")
@@ -67,6 +64,14 @@ async def set_bot_commands(bot: Bot):
         BotCommand(command="start", description=LEXICON["cmd_start_desc"]),
     ]
     await bot.set_my_commands(commands)
+    if config.WEBAPP_URL:
+        await bot.set_chat_menu_button(
+            menu_button=MenuButtonWebApp(
+                text=LEXICON["btn_webapp_menu"],
+                web_app=WebAppInfo(url=config.WEBAPP_URL),
+            )
+        )
+        logger.info(f"🌐 Web App кнопка меню настроена: {config.WEBAPP_URL}")
 
 
 async def main():
@@ -95,14 +100,11 @@ async def main():
 
     dp = Dispatcher(storage=storage)
 
-    # Логирование всех апдейтов и проверка регистрации на каждом сообщении/кнопке
     dp.update.middleware(LoggingMiddleware())
     dp.message.outer_middleware(RegistrationCheckMiddleware())
     dp.callback_query.outer_middleware(RegistrationCheckMiddleware())
 
-    dp.include_router(admin_router)
     dp.include_router(student_router)
-    dp.include_router(teacher_router)
 
     await set_bot_commands(bot)
     logger.info("🚀 Бот запущен!")
