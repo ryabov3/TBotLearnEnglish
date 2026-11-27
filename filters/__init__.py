@@ -1,3 +1,4 @@
+from filters.name import ValidNameFilter, is_valid_name, normalize_name
 from filters.role import (
     IsAdminFilter,
     IsFounderFilter,
@@ -12,4 +13,7 @@ __all__ = [
     "IsAdminFilter",
     "IsTeacherFilter",
     "IsStudentFilter",
+    "ValidNameFilter",
+    "is_valid_name",
+    "normalize_name",
 ]

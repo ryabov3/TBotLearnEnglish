@@ -1,7 +1,9 @@
 # keyboards/teacher.py
 """Клавиатуры для роли учителя."""
 
-from aiogram.types import InlineKeyboardMarkup
+from aiogram.types import InlineKeyboardMarkup, WebAppInfo
+
+import config.config as config
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 
 from lexicon import LEXICON
@@ -12,6 +14,13 @@ def get_teacher_panel_kb(
 ) -> InlineKeyboardMarkup:
     builder = InlineKeyboardBuilder()
     layout: list[int] = []
+
+    if config.WEBAPP_URL:
+        builder.button(
+            text=LEXICON["btn_open_webapp"],
+            web_app=WebAppInfo(url=config.WEBAPP_URL),
+        )
+        layout.append(1)
 
     if has_draft:
         builder.button(text=LEXICON["btn_t_resume_draft"], callback_data="t_resume_draft")
