@@ -1,0 +1,49 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
+  <title>TBotLearnEnglish</title>
+  <script src="https://telegram.org/js/telegram-web-app.js"></script>
+  <link rel="stylesheet" href="/static/style.css" />
+</head>
+<body>
+  <div id="app" class="app-shell">
+    <header class="topbar">
+      <div class="brand">
+        <div class="brand-icon">🎓</div>
+        <div>
+          <div class="brand-title">LearnEnglish</div>
+          <div id="user-subtitle" class="brand-subtitle">Загрузка...</div>
+        </div>
+      </div>
+      <span id="role-badge" class="role-badge">...</span>
+    </header>
+
+    <main id="view-container" class="content">
+      <div class="loader-wrap">
+        <div class="spinner"></div>
+        <p class="muted">Подключаемся к серверу...</p>
+      </div>
+    </main>
+
+    <nav id="bottom-nav" class="bottom-nav hidden"></nav>
+  </div>
+
+  <!-- Модальное окно -->
+  <div id="modal-backdrop" class="modal-backdrop hidden">
+    <div class="modal-sheet">
+      <div class="modal-header">
+        <h3 id="modal-title"></h3>
+        <button id="modal-close" class="icon-btn" aria-label="Закрыть">✕</button>
+      </div>
+      <div id="modal-body" class="modal-body"></div>
+    </div>
+  </div>
+
+  <!-- Уведомления (toast) -->
+  <div id="toast" class="toast hidden"></div>
+
+  <script src="/static/app.js"></script>
+</body>
+</html>
